@@ -103,4 +103,4 @@ CarPi only sends standard, read-only OBD-II Mode 01 requests, the same ones any 
 
 ## License
 
-[MIT](LICENSE)
+[MIT](LICENSE). Developed with help from [Claude](https://claude.ai).
