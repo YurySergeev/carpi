@@ -79,7 +79,7 @@ python3 ~/carpi/probe_addressing.py --watch  # live values once a second
 sudo systemctl start carpi-logger
 ```
 
-Columns, decoding formulas and metadata: [docs/data-format.md](docs/data-format.md)
+Columns, decoding formulas and metadata: [docs/data-format.md](docs/data-format.md). The baseline drive is in [`data/`](data) if you want to poke at real numbers.
 
 ## First results
 

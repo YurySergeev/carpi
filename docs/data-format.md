@@ -59,7 +59,7 @@ Put one word in `~/carpi/tag.txt` (for example `baseline`, `post-pcv`, `stage1`)
 ```python
 import pandas as pd
 
-df = pd.read_csv("drive-2026-09-25_203526.csv").ffill()
+df = pd.read_csv("data/drive-2026-09-25_203526.csv").ffill()  # the sample drive in this repo
 df["boost_psi"] = (df["boost_act_kpa"] - df["baro_kpa"]) / 6.895
 df["fuel_trim_pct"] = df["stft_pct"] + df["ltft_pct"]
 ```
