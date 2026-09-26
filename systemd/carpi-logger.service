@@ -1,0 +1,14 @@
+[Unit]
+Description=CarPi OBD-II drive logger
+After=can0.service
+Requires=can0.service
+
+[Service]
+User=carpi
+WorkingDirectory=/home/carpi/carpi
+ExecStart=/usr/bin/python3 -u carpi_logger.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,13 @@
+# Data from the car (stays on the Pi / local machine)
+logs/
+probes/
+candump/
+tag.txt
+
+# Private notes
+notes/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
