@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CarPi drive log · Yury Sergeev</title>
+  <meta name="description" content="Engine data from a 2017 Audi A3, logged over CAN by a Raspberry Pi. Browse drives, signals and fuel-trim breakdowns.">
+  <meta name="theme-color" content="#0e0f11">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%230e0f11'/%3E%3Cpath d='M2 11h3V5h2v6h2V7h2v4h3' fill='none' stroke='%23f2b54a' stroke-width='1.5'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/uplot@1.6.31/dist/uPlot.min.css" integrity="sha384-IfV0B7MIOYuO95kO9G5ySKPz/85zqFNOAs8iy4tkK5zd9izhJAB8b7lHrwYqqmYE" crossorigin="anonymous">
+  <link rel="stylesheet" href="style.css">
+  <script src="https://cdn.jsdelivr.net/npm/uplot@1.6.31/dist/uPlot.iife.min.js" integrity="sha384-XMP23k7YSCFr13Xrkxh4IO0v1W+8fB6AP+3Vycxphp2Z0V2vocAZHyuGaFCysrtM" crossorigin="anonymous" defer></script>
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <a class="back" href="https://yurysergeev.github.io/">← Yury Sergeev</a>
+      <h1>CarPi drive log</h1>
+      <p class="lede">Engine data from my 2017 Audi A3, requested from the ECU over CAN by a Raspberry Pi on the OBD-II port, about 8 times a second.</p>
+      <p class="status"><span class="status-dot" aria-hidden="true"></span><span id="status-text">Loading drives…</span></p>
+
+      <div class="stats" id="stats" aria-live="polite"></div>
+      <p class="finding" id="finding" hidden></p>
+    </header>
+
+    <main id="content">
+      <section class="section" aria-labelledby="drives-h">
+        <h2 class="label" id="drives-h">Drives</h2>
+        <div class="drive-groups" id="drives"></div>
+      </section>
+
+      <section class="section" aria-labelledby="trace-h">
+        <div class="section-head">
+          <h2 class="label" id="trace-h">Signal trace</h2>
+          <p class="hint"><span class="hint-mouse">Hover to read values · drag to zoom · double-click to reset</span><span class="hint-touch">Best explored on a laptop: hover to read, drag to zoom</span></p>
+        </div>
+        <div class="signals" id="signals" role="group" aria-label="Signals to plot"></div>
+        <p class="readout" id="readout" aria-live="off">&nbsp;</p>
+        <div class="trace" id="trace"></div>
+      </section>
+
+      <section class="section" aria-labelledby="trim-h">
+        <div class="section-head">
+          <h2 class="label" id="trim-h">Fuel trim by engine speed</h2>
+          <label class="toggle"><input type="checkbox" id="steady" checked> Steady state only</label>
+        </div>
+        <p class="caption" id="trim-caption"></p>
+        <div class="bands" id="bands"></div>
+      </section>
+
+      <section class="section" aria-labelledby="checks-h">
+        <h2 class="label" id="checks-h">Sensor checks</h2>
+        <p class="caption">Every decoded value compared against a physical or expected reference before the data is trusted.</p>
+        <ul class="checks" id="checks"></ul>
+      </section>
+
+      <section class="section" aria-labelledby="built-h">
+        <h2 class="label" id="built-h">How it's built</h2>
+        <ol class="pipeline">
+          <li>Pi 4 + MCP2515 on the OBD-II port</li>
+          <li>OBD-II polling over SocketCAN</li>
+          <li>One CSV per drive</li>
+          <li>Python analysis in a GitHub Action</li>
+          <li>This page</li>
+        </ol>
+        <p class="caption">The car's gateway blocks passive listening, so the logger asks the engine for each value, with a small ISO-TP layer for multi-frame replies. Code, hardware notes and the full report are <a class="inline-link" href="https://github.com/YurySergeev/carpi">on GitHub</a>.</p>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <a class="inline-link" href="https://yurysergeev.github.io/">Yury Sergeev</a> · <a class="inline-link" href="https://github.com/YurySergeev/carpi">Source</a>
+    </footer>
+  </div>
+</body>
+</html>

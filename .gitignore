@@ -11,3 +11,8 @@ notes/
 __pycache__/
 *.pyc
 .venv/
+
+# Drive viewer build output and local tooling
+_site/
+.pytest_cache/
+.claude/

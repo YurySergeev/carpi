@@ -2,6 +2,8 @@
 
 A Raspberry Pi that lives on my Audi's OBD-II port, asks the engine ECU for 25 live values about 8 times a second, and writes one CSV per drive.
 
+**[Explore the drives in the viewer →](https://yurysergeev.github.io/carpi/)**
+
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/drive-trace-dark.png">
   <img alt="Speed, engine speed, boost and total fuel trim over a 21-minute drive" src="docs/images/drive-trace-light.png">
@@ -62,12 +64,12 @@ The logger unit assumes user `carpi` and the repo at `/home/carpi/carpi`. Adjust
 
 ## Usage
 
-With the Pi plugged in and powered, every engine start becomes a new `~/carpi/logs/drive-<start>.csv`.
+With the Pi plugged in and powered, every engine start becomes a new CSV in a folder per day: `~/carpi/logs/2026-09-26/drive-231349.csv`.
 
 ```bash
 journalctl -u carpi-logger -f               # watch it live
 echo post-pcv > ~/carpi/tag.txt             # label upcoming drives for before/after comparisons
-scp "carpi@carpi.local:~/carpi/logs/*" .    # pull logs to a PC
+scp -r "carpi@carpi.local:~/carpi/logs/*" . # pull the day folders to a PC
 ```
 
 To see what your car supports, stop the logger and run the probe:
@@ -79,7 +81,9 @@ python3 ~/carpi/probe_addressing.py --watch  # live values once a second
 sudo systemctl start carpi-logger
 ```
 
-Columns, decoding formulas and metadata: [docs/data-format.md](docs/data-format.md). The baseline drive is in [`data/`](data) if you want to poke at real numbers.
+Columns, decoding formulas and metadata: [docs/data-format.md](docs/data-format.md). The published drives are in [`data/`](data) if you want to poke at real numbers.
+
+To publish a drive to the [viewer](https://yurysergeev.github.io/carpi/), copy it into `data/` with its day folder (`data/2026-09-26/drive-231349.csv`, since file names repeat across days), add an entry to [`data/drives.toml`](data/drives.toml) with `file = "2026-09-26/drive-231349.csv"`, and push. A GitHub Action tests the analysis, builds the page and deploys it. For a quick summary in the terminal: `python analysis/carpi_analysis.py <drive.csv>`.
 
 ## First results
 

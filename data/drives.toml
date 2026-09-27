@@ -1,0 +1,38 @@
+# Drives published on the viewer (yurysergeev.github.io/carpi). Order here = order on the page.
+# To publish a drive: copy its CSV into data/, add an entry, push. The GitHub Action does the rest.
+# Keep the Pi's day folders when copying (file = "2026-09-26/drive-231349.csv"), since file names repeat across days.
+
+# Drives with the same `group` are shown together under that heading.
+# Optional placeholder group for drives still to come. Delete once one is published.
+upcoming = "After PCV repair"
+
+[[drive]]
+id      = "2026-09-25-baseline"
+file    = "drive-2026-09-25_203526.csv"
+title   = "Baseline"
+group   = "Before PCV repair"
+date    = 2026-09-25
+tag     = "baseline"
+note    = "Before the PCV replacement. Part throttle only."
+finding = "The ECU adds 8.6% fuel at idle but under 1% while driving, the signature of a small vacuum leak. The usual suspect on this engine is the PCV valve, so it's getting replaced and retested."
+
+# Logged on Sept 26. The Pi's clock hadn't synced, so these files are stamped Sept 25.
+[[drive]]
+id      = "2026-09-26-cold-start"
+file    = "2026-09-26/drive-223818.csv"
+title   = "Cold start"
+group   = "Before PCV repair"
+date    = 2026-09-26
+tag     = "baseline"
+note    = "From a cold engine to fully warm, then around town."
+finding = "The engine went from 17 °C to 80 °C in under 6 minutes. Once warm, idle fuel trim is already +4.7%, and it keeps climbing over the day's next drives as the ECU adapts."
+
+[[drive]]
+id      = "2026-09-26-first-pull"
+file    = "2026-09-26/drive-231349.csv"
+title   = "First pull"
+group   = "Before PCV repair"
+date    = 2026-09-26
+tag     = "baseline"
+note    = "The first hard acceleration, plus 15 minutes of warm idle."
+finding = "Boost hit 21.0 psi at 3,276 rpm with fueling right on target, but timing dropped to −7° at the peak. Standard OBD can't tell planned timing from knock retard; per-cylinder knock data will. Idle fuel trim here is +7.8%."
