@@ -1,8 +1,8 @@
 # Data format
 
-Each drive produces two files in `~/carpi/logs/`, named after the drive's start time.
+Each drive produces two files in a folder for its day, named after the drive's start time: `~/carpi/logs/2026-09-26/drive-231349.csv` and `.json`. The date and time come from the Pi's clock, which has no battery-backed RTC, so they can be off until the Pi syncs over the internet (`clock_ok`).
 
-## `drive-<start>.csv`
+## `drive-HHMMSS.csv`
 
 One row per poll loop, about 7.7 rows/s on this car. Fast columns appear in every row. Slow columns rotate, so each one refreshes about every 1.6 s and is blank on the rows in between (`df.ffill()` fills them).
 
@@ -41,7 +41,7 @@ One row per poll loop, about 7.7 rows/s on this car. Fast columns appear in ever
 
 The Pi has no real-time clock, so `time` can be wrong until NTP syncs. Use `elapsed_s` for analysis and `clock_ok` to know when `time` is trustworthy.
 
-## `drive-<start>.json`
+## `drive-HHMMSS.json`
 
 Written when the drive starts: `start`, `tag`, `request_id`, `supported_pids`, `fast_pids`, `slow_pids`.
 Refreshed every 30 s: `rows`, `duration_s`, `complete`. `"complete": false` means power was cut before the drive ended cleanly.

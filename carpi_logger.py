@@ -12,11 +12,13 @@ Runs forever as a systemd service and writes one CSV per drive.
           fast PIDs every loop and one slow PID per loop (round-robin).
   END     Engine silent for --end-after seconds (ignition off) -> close the file.
 
-Output (default ~/carpi/logs/):
-  drive-<start>.csv   one row per poll loop; slow columns are blank on rows where
+Output (default ~/carpi/logs/), one folder per day, e.g. logs/2026-09-26/:
+  drive-HHMMSS.csv    one row per poll loop; slow columns are blank on rows where
                       they weren't sampled (pandas: df.ffill())
-  drive-<start>.json  metadata: tag, supported PIDs, rows, duration. Refreshed every 30 s;
+  drive-HHMMSS.json   metadata: tag, supported PIDs, rows, duration. Refreshed every 30 s;
                       "complete": false means power was cut before the drive ended cleanly.
+  The day and time come from the Pi's clock, which has no RTC: until NTP syncs they
+  can be off (see clock_ok).
   clock_ok column     1 once the Pi's clock has synced from the internet. Rows with 0 may have
                       wrong wall-clock times; elapsed_s is always right.
 Tag drives for before/after comparisons by putting one word in ~/carpi/tag.txt
@@ -195,6 +197,17 @@ def write_meta(path, meta):
     os.replace(tmp, path)
 
 
+def new_drive_stem(daydir, started):
+    """drive-HHMMSS, or drive-HHMMSS-2, -3... if that name is taken. Without an RTC the clock
+    can repeat after a power-cut reboot, and a repeated name must never overwrite a drive."""
+    base = f"drive-{started:%H%M%S}"
+    stem, n = daydir / base, 1
+    while stem.with_suffix(".csv").exists() or stem.with_suffix(".json").exists():
+        n += 1
+        stem = daydir / f"{base}-{n}"
+    return stem
+
+
 def log_drive(engine, args):
     started = datetime.now()
     supported = engine.supported()
@@ -202,9 +215,9 @@ def log_drive(engine, args):
     slow = [p for p in SLOW if p in supported]
     columns = ["time", "elapsed_s", "clock_ok"] + [c for p in fast + slow for c, _ in PIDS[p]]
 
-    logdir = Path(args.logdir).expanduser()
-    logdir.mkdir(parents=True, exist_ok=True)
-    stem = logdir / f"drive-{started:%Y-%m-%d_%H%M%S}"
+    daydir = Path(args.logdir).expanduser() / f"{started:%Y-%m-%d}"
+    daydir.mkdir(parents=True, exist_ok=True)
+    stem = new_drive_stem(daydir, started)
     csv_path, meta_path = stem.with_suffix(".csv"), stem.with_suffix(".json")
     meta = {
         "start": started.isoformat(timespec="seconds"),
@@ -215,14 +228,14 @@ def log_drive(engine, args):
         "slow_pids": [f"{p:02X}" for p in slow],
     }
     write_meta(meta_path, meta)
-    log(f"drive started -> {csv_path.name} (tag '{meta['tag']}', "
+    log(f"drive started -> {daydir.name}/{csv_path.name} (tag '{meta['tag']}', "
         f"{len(fast)} fast + {len(slow)} slow PIDs via 0x{engine.req_id:X})")
 
     rows, i = 0, 0
     t0 = time.monotonic()
     last_reply = last_sync = last_status = last_meta = t0
     latest = {}
-    with open(csv_path, "w", newline="", buffering=1) as f:
+    with open(csv_path, "x", newline="", buffering=1) as f:   # "x": never truncate an existing file
         writer = csv.DictWriter(f, fieldnames=columns, restval="")
         writer.writeheader()
         try:
@@ -279,7 +292,7 @@ def log_drive(engine, args):
                 meta.update(end=datetime.now().isoformat(timespec="seconds"),
                             rows=rows, duration_s=duration, complete=True)
                 write_meta(meta_path, meta)
-                log(f"drive ended: {rows} rows, {duration} s -> {csv_path.name}")
+                log(f"drive ended: {rows} rows, {duration} s -> {daydir.name}/{csv_path.name}")
 
 
 def run(args):
