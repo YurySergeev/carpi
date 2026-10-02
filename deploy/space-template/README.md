@@ -1,0 +1,22 @@
+---
+title: CarPi Analyzer
+emoji: 🚗
+colorFrom: blue
+colorTo: gray
+sdk: docker
+app_port: 7860
+pinned: false
+short_description: Explore OBD-II drive logs from a 2017 Audi A3
+---
+
+# CarPi Analyzer
+
+An interactive viewer for drive logs from a Raspberry Pi CAN logger on a 2017 Audi A3
+(EA888 Gen 3, DQ250). Pick drives in the sidebar, then use the tabs:
+
+- **Time series**: one drive with channels stacked, one shared zoom and a crosshair. Click a detected event to zoom to it.
+- **X vs Y**: any channel against any other, coloured by drive or a third channel. Click a point to jump to that moment.
+- **Compare drives**: per-drive trends, distributions and overlays.
+- **3-axis map**: ECU-style tables (e.g. timing by rpm × load), as a grid or a 3D surface.
+
+The `drives/` folder holds the raw CSVs. Standard OBD-II PIDs only (no GPS).

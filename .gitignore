@@ -16,3 +16,9 @@ __pycache__/
 _site/
 .pytest_cache/
 .claude/
+
+# Analyzer app cache
+carpi_app/.cache/
+
+# Built copy of the hosted app (deploy/publish_space.py)
+deploy/build/
