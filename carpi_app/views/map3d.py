@@ -3,10 +3,10 @@ Optional A - B difference between two tags (e.g. before/after a repair or tune).
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-from dash import Input, Output, State, dcc, html
+from dash import Input, Output, dcc, html
 
 from .. import channels as ch, config
-from . import G_DRIVES, G_FILTERS, G_QUERY, View, control, empty_fig, note, register
+from . import lazy_callback, G_DRIVES, G_FILTERS, G_QUERY, View, control, empty_fig, note, register
 
 AGGS = {"mean": "Mean", "median": "Median", "min": "Min", "max": "Max", "std": "Std dev",
         "p95": "95th pct", "p05": "5th pct", "count": "Rows"}
@@ -101,7 +101,7 @@ class Map3D(View):
         def ys(c):
             return ch.step(c)
 
-        @app.callback(Output("map-graph", "figure"), Output("map-info", "children"),
+        @lazy_callback(app, self.id, Output("map-graph", "figure"), Output("map-info", "children"),
                       Input("map-x", "value"), Input("map-xstep", "value"), Input("map-y", "value"),
                       Input("map-ystep", "value"), Input("map-z", "value"), Input("map-agg", "value"),
                       Input("map-min", "value"), Input("map-view", "value"), Input("map-a", "value"),

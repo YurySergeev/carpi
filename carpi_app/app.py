@@ -7,7 +7,7 @@ from dash import Dash, Input, Output, State, ctx, dcc, html, no_update
 
 from . import __version__, config, filters
 from .data import Store
-from .views import G_DRIVES, G_FILTERS, G_QUERY, G_STATUS, JUMP, TABS, VIEWS
+from .views import G_DRIVES, G_FILTERS, G_QUERY, G_STATUS, JUMP, TABS, VIEWS, sig_stores
 
 QUERY_HELP = ("Press Enter to apply. Any column, e.g.  rpm > 3000 and coolant_c >= 80   \u00b7   "
               "abs(lambda_err) > 0.05   \u00b7   iat_c.between(30, 45)   \u00b7   2000 < rpm < 3000")
@@ -51,11 +51,14 @@ def sidebar(store):
 
 
 def create_app(store):
+    # Public mode loads Dash/Plotly JavaScript from a CDN so a small hosted server only serves data.
     app = Dash(__name__, title="CarPi Analyzer", suppress_callback_exceptions=True,
+               serve_locally=not config.PUBLIC,
                update_title=None,
                meta_tags=[{"name": "viewport", "content": "width=device-width, initial-scale=1"}])
     app.layout = html.Div([
         dcc.Store(id=JUMP),
+        *sig_stores(),
         sidebar(store),
         html.Main([
             dcc.Tabs(id=TABS, value=VIEWS[0].id, className="tabs", children=[

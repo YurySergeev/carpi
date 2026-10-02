@@ -12,7 +12,7 @@ import numpy as np
 import pandas as pd
 
 from . import config, filters
-from .channels import add_derived
+from .channels import DERIVED, add_derived
 
 SUMMARY_VERSION = 2
 
@@ -176,12 +176,32 @@ class Store:
             if key in self._frames:
                 self._frames.move_to_end(key)
                 return self._frames[key]
-            df, _ = read_csv(info.path)
-            df = prepare(df)
+            df = self._load_prepared(info)
             self._frames[key] = df
             while len(self._frames) > config.FRAME_CACHE_SIZE:
                 self._frames.popitem(last=False)
             return df
+
+    def _disk_key(self, info):
+        """Prepared-frame cache file. Changes when the CSV, the derived channels or the format change."""
+        sig = f"{SUMMARY_VERSION}|{info.size}|{info.mtime}|{','.join(DERIVED)}|{pd.__version__}"
+        return config.CACHE_DIR / "frames" / f"{Path(info.path).stem}-{hashlib.md5(sig.encode()).hexdigest()[:10]}.pkl"
+
+    def _load_prepared(self, info):
+        f = self._disk_key(info)
+        if f.exists():
+            try:
+                return pd.read_pickle(f)       # our own cache file, written below
+            except Exception:
+                pass
+        df, _ = read_csv(info.path)
+        df = prepare(df)
+        try:
+            f.parent.mkdir(parents=True, exist_ok=True)
+            df.to_pickle(f)
+        except OSError:
+            pass
+        return df
 
     def preload(self):
         """Parse every drive into memory (the hosted copy does this in the background at startup)."""
@@ -192,24 +212,39 @@ class Store:
                 print(f"  preload failed for {did}: {ex}")
 
     def frames(self, ids, filter_keys=(), query=None, columns=None):
-        """All selected drives stacked, with drive/tag columns, after filters + query.
+        """All selected drives stacked, after filters + query, plus three columns:
+        order (position of the drive in `ids`, an int that's cheap to send to the browser),
+        drive and tag (categoricals, so grouping 28 drives costs nothing).
         Returns (df, total_rows_before_filtering, error_message_or_None)."""
         parts, total, err = [], 0, None
-        for i, did in enumerate(ids or []):
-            if did not in self.drives:
-                continue
+        ids = [d for d in (ids or []) if d in self.drives]
+        for i, did in enumerate(ids):
             f = self.frame(did)
             total += len(f)
             m, err = filters.mask(f, filter_keys, query)
-            g = f[m] if columns is None else f.loc[m, [c for c in columns if c in f.columns] + ["elapsed_s"]]
-            g = g.copy()
-            g["drive"] = did
-            g["tag"] = self.drives[did].tag
-            g["order"] = i
+            if columns is None:
+                g = f[m].copy()
+            else:
+                keep = list(dict.fromkeys([c for c in columns if c in f.columns] + ["elapsed_s"]))
+                g = f.loc[m, keep].copy()
+            g["order"] = np.int16(i)
             parts.append(g)
         if not parts:
             return pd.DataFrame(), total, err
-        return pd.concat(parts, ignore_index=True), total, err
+        df = pd.concat(parts, ignore_index=True)
+        codes = df["order"].to_numpy()
+        df["drive"] = pd.Categorical.from_codes(codes, categories=ids)
+        tags = [self.drives[d].tag for d in ids]
+        df["tag"] = pd.Categorical(np.asarray(tags, dtype=object)[codes], categories=list(dict.fromkeys(tags)))
+        return df, total, err
+
+    def drive_at(self, ids, order):
+        """Inverse of the `order` column from frames(): the drive id at that position."""
+        ids = [d for d in (ids or []) if d in self.drives]
+        try:
+            return ids[int(order)]
+        except (IndexError, TypeError, ValueError):
+            return None
 
     def columns(self):
         """Columns that have data in at least one loaded/known drive (uses the newest drive)."""

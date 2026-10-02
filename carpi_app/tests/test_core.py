@@ -3,7 +3,6 @@ import json
 
 import numpy as np
 import pandas as pd
-import pytest
 
 from carpi_app import events, filters
 from carpi_app.channels import add_derived
@@ -85,5 +84,8 @@ def test_store_dedupes_copies_and_reads_sidecar(tmp_path, monkeypatch):
     assert len(s.drives) == 1
     info = next(iter(s.drives.values()))
     assert info.tag == "post-pcv" and info.start_ok and info.rows == 50
-    df, total, err = s.frames(list(s.drives), ["warm"], None)
+    df, total, err = s.frames(["missing"] + list(s.drives), ["warm"], None)
     assert total == 50 and len(df) == 50 and "boost_psi" in df
+    did = next(iter(s.drives))
+    assert list(df["drive"].cat.categories) == [did] and df["tag"].iloc[0] == "post-pcv"
+    assert s.drive_at(["missing", did], df["order"].iloc[0]) == did

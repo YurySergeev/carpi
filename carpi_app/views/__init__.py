@@ -23,10 +23,12 @@ Then add it to the import list at the bottom of this file. Component ids must st
 To make clicks in your view open the time-series view at that moment, write
 {"drive": <drive id>, "t0": <seconds>, "t1": <seconds>} to Output(JUMP, "data", allow_duplicate=True).
 """
+import hashlib
 import importlib
+import json
 
 import plotly.graph_objects as go
-from dash import html
+from dash import Input, Output, State, ctx, dcc, html, no_update
 
 # ids of the shared sidebar controls and stores
 G_DRIVES, G_FILTERS, G_QUERY, G_STATUS = "g-drives", "g-filters", "g-query", "g-status"
@@ -51,6 +53,39 @@ def register(cls):
     VIEWS.append(cls())
     VIEWS.sort(key=lambda v: v.order)
     return cls
+
+
+def lazy_callback(app, view_id, *deps, **kw):
+    """Drop-in for @app.callback on a view's main draw function.
+
+    Only runs while the view's tab is showing, and skips the work when you come back to a tab whose
+    inputs haven't changed (the figure is still there). Everything below the tabs would otherwise
+    recompute on every sidebar change, which is slow on a small hosted CPU. The "last drawn" signature
+    lives in a per-browser dcc.Store, so viewers never interfere with each other."""
+    outs = [d for d in deps if isinstance(d, Output)]
+    ins = [d for d in deps if isinstance(d, Input)]
+    sts = [d for d in deps if isinstance(d, State)]
+    sig_id = f"{view_id}-sig"
+    skip = (no_update,) * (len(outs) + 1)
+
+    def deco(fn):
+        @app.callback(*outs, Output(sig_id, "data"), *ins, Input(TABS, "value"), *sts, State(sig_id, "data"), **kw)
+        def wrapped(*args):
+            a_in, tab, a_st, last = args[:len(ins)], args[len(ins)], args[len(ins) + 1:-1], args[-1]
+            if tab != view_id:
+                return skip
+            sig = hashlib.md5(json.dumps(a_in, default=str, sort_keys=True).encode()).hexdigest()
+            if ctx.triggered_id == TABS and sig == last:
+                return skip
+            res = fn(*a_in, *a_st)
+            res = res if isinstance(res, tuple) else (res,)
+            return (*res, sig)
+        return wrapped
+    return deco
+
+
+def sig_stores():
+    return [dcc.Store(id=f"{v.id}-sig") for v in VIEWS]
 
 
 # ---- small shared helpers

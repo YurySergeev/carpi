@@ -58,20 +58,31 @@ Tests: `python -m pytest carpi_app/tests -q`
 - Charging voltage on this car is managed by the car itself ("smart charging"), so 12.5–13 V while cruising
   can be normal. The low-voltage event only fires after more than 60 s below 12.4 V.
 
-## Putting it online (Hugging Face Space)
+## Putting it online (Render, free)
 
-`deploy/publish_space.py` bundles the app and every unique drive into `deploy/build/space/`
-(Dockerfile + gunicorn, read-only "public" mode) and uploads it to a free Hugging Face Docker Space.
+`deploy/publish.py` bundles the app and every unique drive into `deploy/build/site/` (Dockerfile + gunicorn,
+read-only "public" mode) and pushes it to a separate GitHub repo that Render deploys from.
 
-```
-pip install huggingface_hub
-python deploy/publish_space.py --repo YOUR_HF_NAME/carpi-analyzer
-```
+One-time setup:
+1. Create an **empty** GitHub repo (no README), e.g. `carpi-live`.
+2. `python deploy/publish.py render`, then paste the repo URL when asked. It's remembered in `deploy/build/.remote`.
+3. On render.com (sign in with GitHub): **New > Blueprint**, pick the repo, **Apply**. `render.yaml` sets it up as a
+   free Docker web service in Ohio. If Render asks for a card for the Blueprint, use
+   **New > Web Service** instead: pick the repo, keep the Docker runtime and choose the **Free** instance type.
 
-It asks once for a Hugging Face token with write access. After new drives, run the same command again
-and the Space is replaced with the current app and logs. `--exclude "*2026-09-25*"` leaves drives out, and
-`--build-only` builds the folder without uploading. Edit the intro text in `deploy/space-template/Dockerfile`
-(`CARPI_ABOUT`).
+After that, `python deploy/publish.py render` after every batch of new logs. Render redeploys on its own
+(3–5 min). Leave drives out with `--exclude "*2026-09-25*"`. `python deploy/publish.py build` builds without pushing.
+
+How it stays usable on Render's free box (0.1 CPU, 512 MB, sleeps after 15 min idle):
+- CSVs are parsed once during the Docker build (`python -m carpi_app.warm`), so startup only loads ready-made frames.
+- Only the visible tab recomputes, and coming back to a tab with unchanged inputs costs nothing (`lazy_callback`).
+- Figures send compact numeric arrays: box plots and histograms are computed on the server, and scatter is capped at 60k points.
+- Dash/Plotly JavaScript comes from a CDN, not the tiny server.
+
+I tested this at 0.1 CPU and 512 MB with all 28 drives: every interaction finished in about 3 s or less, with peak memory around 220 MB.
+A first visit after the service has been asleep takes about a minute while Render wakes it.
+
+Hugging Face also works (`python deploy/publish.py hf --repo NAME/carpi-analyzer`), but Docker Spaces need PRO since July 2026.
 
 Public mode (`CARPI_PUBLIC=1`) hides the rescan button and local paths. The Query box always uses
 `safe_query.py`, a whitelist parser (columns, numbers, comparisons, and/or/not, arithmetic, `abs`,

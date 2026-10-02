@@ -5,7 +5,7 @@ from plotly.subplots import make_subplots
 import plotly.graph_objects as go
 
 from .. import channels as ch, config, events, filters
-from . import G_DRIVES, G_FILTERS, G_QUERY, JUMP, View, control, empty_fig, register
+from . import lazy_callback, G_DRIVES, G_FILTERS, G_QUERY, JUMP, View, control, empty_fig, register
 
 DEFAULT_CHANNELS = ["rpm", "boost_psi", "timing_deg", "lambda", "lambda_cmd", "trim_total", "volts"]
 
@@ -114,7 +114,8 @@ class TimeSeries(View):
         ])
 
     def callbacks(self, app, store):
-        @app.callback(
+        @lazy_callback(
+            app, self.id,
             Output("ts-drive", "value"), Output("ts-graph", "figure"), Output("ts-events", "data"),
             Output("ts-info", "children"),
             Input("ts-drive", "value"), Input("ts-channels", "value"), Input("ts-opts", "value"),
@@ -123,8 +124,8 @@ class TimeSeries(View):
             Input("ts-reset", "n_clicks"),
             State("ts-events", "data"))
         def draw(drive, chs, opts, kinds, g_ids, keys, query, jump, cell, _reset, rows):
-            trig = ctx.triggered_id
-            if trig == "ts-events":
+            fired = set(ctx.triggered_prop_ids.values())   # several can fire at once (jump + tab)
+            if "ts-events" in fired:
                 if not cell or not rows:
                     return no_update, no_update, no_update, no_update
                 r = next((x for x in rows if x["id"] == cell.get("row_id")), None)
@@ -134,7 +135,7 @@ class TimeSeries(View):
                 p["layout"]["xaxis"]["range"] = zoom_to(r["t0"], r["t1"])
                 p["layout"]["xaxis"]["autorange"] = False
                 return no_update, p, no_update, no_update
-            if trig == "ts-reset":
+            if "ts-reset" in fired:
                 p = Patch()
                 p["layout"]["xaxis"]["autorange"] = True
                 for i in range(1, 12):
@@ -142,11 +143,11 @@ class TimeSeries(View):
                 return no_update, p, no_update, no_update
 
             rng = None
-            if trig == JUMP and jump and jump.get("drive") in store.drives:
+            if JUMP in fired and jump and jump.get("drive") in store.drives:
                 drive = jump["drive"]
                 if jump.get("t0") is not None:
                     rng = zoom_to(jump["t0"], jump.get("t1") or jump["t0"])
-            elif trig == G_DRIVES and g_ids and drive not in g_ids:
+            elif G_DRIVES in fired and g_ids and drive not in g_ids:
                 drive = g_ids[0]
             if not drive or drive not in store.drives:
                 drive = (g_ids or [None])[0] or (list(store.drives) or [None])[-1]

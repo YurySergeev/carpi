@@ -19,6 +19,8 @@ PUBLIC = os.environ.get("CARPI_PUBLIC", "") not in ("", "0", "false", "False")
 ABOUT = os.environ.get("CARPI_ABOUT", "")
 
 MAX_SCATTER_POINTS = 150_000   # scatter is randomly thinned above this (seeded, so it is stable)
+if PUBLIC:                     # small hosted box (Render free: 0.1 CPU, 512 MB)
+    MAX_SCATTER_POINTS = 60_000
 FRAME_CACHE_SIZE = 200         # parsed drives kept in memory (~2 MB each)
 
 # ---- palette (same as analyze_drives.py so reports and app match)

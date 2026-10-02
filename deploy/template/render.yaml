@@ -1,0 +1,11 @@
+# Render Blueprint: Dashboard > New > Blueprint > pick this repo. Free plan, redeploys on every push.
+services:
+  - type: web
+    name: carpi-analyzer
+    runtime: docker
+    plan: free
+    region: ohio
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /
+    autoDeployTrigger: commit

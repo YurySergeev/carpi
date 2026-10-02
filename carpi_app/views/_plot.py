@@ -19,7 +19,8 @@ def group_colors(store, df, by):
     if by == "tag":
         keys = store.tags()
     else:
-        keys = list(dict.fromkeys(df.sort_values("order")["drive"]))
+        d = df["drive"]
+        keys = list(d.cat.categories) if hasattr(d, "cat") else list(dict.fromkeys(d))
     return {k: (config.color(i), config.dash_style(i)) for i, k in enumerate(keys)}
 
 

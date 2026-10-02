@@ -1,9 +1,10 @@
 """X vs Y scatter across drives, coloured by drive, tag or any channel. Click a point to inspect it."""
+import numpy as np
 import plotly.graph_objects as go
-from dash import Input, Output, dcc, html, no_update
+from dash import Input, Output, State, dcc, html, no_update
 
 from .. import channels as ch, config
-from . import G_DRIVES, G_FILTERS, G_QUERY, JUMP, TABS, View, control, empty_fig, note, register
+from . import lazy_callback, G_DRIVES, G_FILTERS, G_QUERY, JUMP, TABS, View, control, empty_fig, note, register
 from ._plot import binned_median, colorscale_for, group_colors, short_label
 
 
@@ -27,6 +28,7 @@ class Scatter(View):
                     {"label": " Binned median line", "value": "median"}], value=[], className="checks")),
             ], className="toolbar"),
             html.Div(id="sc-info", className="info"),
+            dcc.Store(id="sc-curves"),
             dcc.Loading(dcc.Graph(id="sc-graph", style={"height": "640px"},
                                   config={"displaylogo": False, "scrollZoom": True}),
                         type="dot", color=config.SERIES[0]),
@@ -34,11 +36,16 @@ class Scatter(View):
         ])
 
     def callbacks(self, app, store):
-        @app.callback(Output("sc-graph", "figure"), Output("sc-info", "children"),
+        @lazy_callback(app, self.id, Output("sc-graph", "figure"), Output("sc-info", "children"),
+                       Output("sc-curves", "data"),
                       Input("sc-x", "value"), Input("sc-y", "value"), Input("sc-color", "value"),
                       Input("sc-mode", "value"), Input("sc-trend", "value"),
                       Input(G_DRIVES, "value"), Input(G_FILTERS, "value"), Input(G_QUERY, "value"))
-        def draw(x, y, color, mode, trend, ids, keys, query):
+        def draw(*args):
+            fig, info = _draw(*args)
+            return fig, info, [getattr(t, "meta", None) for t in fig.data]   # trace -> drive, for clicks
+
+        def _draw(x, y, color, mode, trend, ids, keys, query):
             if not ids:
                 return empty_fig("Select drives in the sidebar."), ""
             cols = [x, y] + ([color] if color not in ("drive", "tag") else [])
@@ -57,30 +64,40 @@ class Scatter(View):
                                              colorbar=dict(title="rows", thickness=12),
                                              hovertemplate="x %{x}<br>y %{y}<br>%{z} rows<extra></extra>"))
                 fig.data[0].update(zmin=1)
-            elif color in ("drive", "tag"):
-                cmap = group_colors(store, df, color)
-                for key, g in df.groupby(color, sort=False):
-                    c, _ = cmap.get(key, (config.SERIES[0], "solid"))
-                    name = short_label(store, key) if color == "drive" else key
-                    fig.add_trace(go.Scattergl(
-                        x=g[x], y=g[y], mode="markers", name=name,
-                        marker=dict(size=6, color=c, opacity=0.6, line=dict(width=0)),
-                        customdata=g[["drive", "elapsed_s"]].to_numpy(),
-                        hovertemplate=f"{ch.label(x)} %{{x:.3~f}}<br>{ch.label(y)} %{{y:.3~f}}"
-                                      f"<br>{name} · %{{customdata[1]:.0f}} s<extra></extra>"))
             else:
-                cs = colorscale_for(df[color])
-                fig.add_trace(go.Scattergl(
-                    x=df[x], y=df[y], mode="markers", showlegend=False,
-                    marker=dict(size=6, color=df[color], opacity=0.7, line=dict(width=0),
-                                colorbar=dict(title=ch.label(color), thickness=12, title_side="right"), **cs),
-                    customdata=df[["drive", "elapsed_s", color]].to_numpy(),
-                    hovertemplate=f"{ch.label(x)} %{{x:.3~f}}<br>{ch.label(y)} %{{y:.3~f}}<br>"
-                                  f"{ch.label(color)} %{{customdata[2]:.3~f}}<br>%{{customdata[0]}} · "
-                                  f"%{{customdata[1]:.0f}} s<extra></extra>"))
+                # One trace per drive keeps every array numeric (fast to send) and lets hover name the drive.
+                by_channel = color not in ("drive", "tag")
+                cmap = group_colors(store, df, "tag" if color == "tag" else "drive")
+                if by_channel:
+                    cs = colorscale_for(df[color])
+                    fig.update_layout(coloraxis=dict(
+                        colorscale=cs["colorscale"], cmin=cs.get("cmin"), cmax=cs.get("cmax"), cmid=cs.get("cmid"),
+                        colorbar=dict(title=ch.label(color), thickness=12, title_side="right")))
+                shown_tags = set()
+                for did, g in df.groupby("drive", sort=False, observed=True):
+                    name = short_label(store, did)
+                    tag = store.drives[did].tag
+                    cols = ["order", "elapsed_s"] + ([color] if by_channel else [])
+                    cd = g[cols].to_numpy(dtype="float32")
+                    if by_channel:
+                        marker = dict(size=6, color=g[color].to_numpy(), coloraxis="coloraxis", opacity=0.7)
+                        extra_hover = f"<br>{ch.label(color)} %{{customdata[2]:.3~f}}"
+                        legend = dict(showlegend=False)
+                    else:
+                        c = cmap.get(tag if color == "tag" else did, (config.SERIES[0], ""))[0]
+                        marker = dict(size=6, color=c, opacity=0.6)
+                        extra_hover = ""
+                        legend = (dict(name=name) if color == "drive" else
+                                  dict(name=tag, legendgroup=tag, showlegend=tag not in shown_tags))
+                        shown_tags.add(tag)
+                    fig.add_trace(go.Scattergl(
+                        x=g[x].to_numpy(), y=g[y].to_numpy(), mode="markers", marker=dict(line=dict(width=0), **marker),
+                        customdata=cd, meta=did, **legend,
+                        hovertemplate=f"{ch.label(x)} %{{x:.3~f}}<br>{ch.label(y)} %{{y:.3~f}}{extra_hover}"
+                                      f"<br>{name} \u00b7 %{{customdata[1]:.0f}} s<extra></extra>"))
             if "median" in (trend or []):
                 by = color if color in ("drive", "tag") else None
-                groups = df.groupby(by, sort=False) if by else [(None, df)]
+                groups = df.groupby(by, sort=False, observed=True) if by else [(None, df)]
                 cmap = group_colors(store, df, by) if by else {}
                 for key, g in groups:
                     bx, by_ = binned_median(g[x], g[y])
@@ -97,10 +114,22 @@ class Scatter(View):
             return fig, note(total, matched, err, extra)
 
         @app.callback(Output(JUMP, "data", allow_duplicate=True), Output(TABS, "value", allow_duplicate=True),
-                      Input("sc-graph", "clickData"), prevent_initial_call=True)
-        def jump(click):
+                      Input("sc-graph", "clickData"), State("sc-curves", "data"), State("sc-x", "value"),
+                      State("sc-y", "value"), prevent_initial_call=True)
+        def jump(click, curves, x, y):
+            # Find the clicked row on the server: the trace tells us the drive, x/y pin down the moment.
             try:
-                did, t = click["points"][0]["customdata"][:2]
+                pt = click["points"][0]
+                did = (curves or [])[pt["curveNumber"]]
+                px, py = float(pt["x"]), float(pt["y"])
             except (TypeError, KeyError, IndexError, ValueError):
                 return no_update, no_update
-            return {"drive": did, "t0": float(t), "t1": float(t)}, "ts"
+            if not isinstance(did, str) or did not in store.drives:
+                return no_update, no_update
+            f = store.frame(did)
+            if x not in f or y not in f:
+                return no_update, no_update
+            sx, sy = (f[x].std() or 1.0), (f[y].std() or 1.0)
+            dist = ((f[x] - px).abs() / sx + (f[y] - py).abs() / sy).fillna(np.inf)
+            t = float(f["elapsed_s"].iloc[int(np.argmin(dist.to_numpy()))])
+            return {"drive": did, "t0": t, "t1": t}, "ts"
