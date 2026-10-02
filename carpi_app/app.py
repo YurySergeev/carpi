@@ -6,6 +6,7 @@ import webbrowser
 from dash import Dash, Input, Output, State, ctx, dcc, html, no_update
 
 from . import __version__, config, filters
+from .examples import EXAMPLES
 from .data import Store
 from .views import G_DRIVES, G_FILTERS, G_QUERY, G_STATUS, JUMP, TABS, VIEWS, sig_stores
 
@@ -20,6 +21,8 @@ def sidebar(store):
         *([html.P(config.ABOUT, className="about")] if config.PUBLIC and config.ABOUT else []),
         *([html.P(["New here? Start with the ", html.B("Guide"), " tab."], className="ctl-hint")]
           if config.PUBLIC else []),
+        dcc.Dropdown(id="g-example", placeholder="Open an example\u2026", className="ex-pick", searchable=False,
+                     options=[{"label": e["title"], "value": e["id"]} for e in EXAMPLES]),
         html.Div(id=G_STATUS, className="muted small"),
         html.Label("Drives", className="ctl-label"),
         dcc.Dropdown(id=G_DRIVES, options=store.options(), value=newest, multi=True,
@@ -56,6 +59,7 @@ def create_app(store):
     start_tab = "guide" if config.PUBLIC and "guide" in ids else next(i for i in ids if i != "guide")
     app.layout = html.Div([
         dcc.Store(id=JUMP),
+        dcc.Location(id="g-url", refresh=False),
         *sig_stores(),
         sidebar(store),
         html.Main([

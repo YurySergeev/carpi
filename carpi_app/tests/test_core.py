@@ -89,3 +89,25 @@ def test_store_dedupes_copies_and_reads_sidecar(tmp_path, monkeypatch):
     did = next(iter(s.drives))
     assert list(df["drive"].cat.categories) == [did] and df["tag"].iloc[0] == "post-pcv"
     assert s.drive_at(["missing", did], df["order"].iloc[0]) == did
+
+
+def test_app_builds_in_both_modes(tmp_path, monkeypatch):
+    """Catches bad component props / duplicate outputs, which only fail when the layout is built."""
+    import importlib
+    from carpi_app import app as app_mod, config
+    monkeypatch.setattr("carpi_app.config.CACHE_DIR", tmp_path / ".cache")
+    for public in (False, True):
+        monkeypatch.setattr(config, "PUBLIC", public)
+        importlib.reload(app_mod)
+        a = app_mod.create_app(Store([tmp_path]))
+        assert a.layout is not None and len(a.callback_map) > 10
+
+
+def test_examples_reference_real_controls():
+    from carpi_app.examples import EXAMPLES
+    from carpi_app.filters import FILTERS
+    from carpi_app.views.guide import CONTROLS
+    for e in EXAMPLES:
+        assert e["tab"] in ("ts", "sc", "cmp", "map")
+        assert set(e.get("filters", [])) <= set(FILTERS), e["id"]
+        assert set(e["set"]) <= set(CONTROLS), e["id"]

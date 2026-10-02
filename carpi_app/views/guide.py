@@ -1,7 +1,15 @@
 """Guide tab: a short how-to for people opening the hosted copy. The hosted copy opens on this tab."""
-from dash import dcc, html
+from urllib.parse import parse_qs
 
-from . import View, register
+from dash import Input, Output, dcc, html, no_update
+
+from .. import examples as ex
+from . import G_DRIVES, G_FILTERS, G_QUERY, JUMP, TABS, View, register
+
+# every control an example may set; unset ones are left alone
+CONTROLS = ["sc-x", "sc-y", "sc-color", "sc-mode", "sc-trend", "cmp-ch", "cmp-mode", "cmp-stat",
+            "map-x", "map-xstep", "map-y", "map-ystep", "map-z", "map-agg", "map-min", "map-view",
+            "map-a", "map-b", "ts-channels"]
 
 GUIDE = """
 ### What this is
@@ -42,7 +50,6 @@ In any chart: **drag or scroll to zoom, double-click to reset, hover to read val
 - **Standard OBD-II only:** no per-cylinder knock, oil temp/pressure or DSG data yet.
 - **DSG upshifts under load** cut timing to about −25° and spike λ for ~0.3 s. That's normal torque reduction, and the
   detectors ignore it.
-- **The pedal PID tops out around 60%** on this car. About 86% throttle is wide open.
 - **Smart charging:** 12.5–13 V while cruising can be normal. Look for 14.3 V+ spikes when coasting.
 - **Slow channels** (temps, voltage, long-term trim, fuel level) update about every 1.6 s. Everything else updates every 0.13 s.
 - **The first visit after a quiet spell** takes about a minute while the free server wakes up.
@@ -54,4 +61,39 @@ class Guide(View):
     id, label, order = "guide", "Guide", 90
 
     def layout(self, store):
-        return html.Div(dcc.Markdown(GUIDE, className="guide-md"), className="guide-pane")
+        cards = [dcc.Link([
+            html.Img(src=f"/assets/examples/{e['id']}.png", alt="", className="ex-img"),
+            html.Div([html.Div(e["title"], className="ex-title"), html.Div(e["blurb"], className="ex-blurb"),
+                      html.Div("Open \u2192", className="ex-open")], className="ex-body"),
+        ], href=f"/?example={e['id']}", className="ex-card") for e in ex.EXAMPLES]
+        return html.Div([
+            html.H3("Try an example", className="ex-h"),
+            html.P("Each card sets up the drives, filters and chart for you. Change anything afterwards to explore.",
+                   className="muted"),
+            html.Div(cards, className="ex-grid"),
+            dcc.Markdown(GUIDE, className="guide-md"),
+        ], className="guide-pane")
+
+    def callbacks(self, app, store):
+        @app.callback(Output("g-url", "search"), Input("g-example", "value"), prevent_initial_call=True)
+        def pick(eid):
+            return f"?example={eid}" if eid else no_update
+
+        outs = ([Output(TABS, "value", allow_duplicate=True), Output(G_DRIVES, "value", allow_duplicate=True),
+                 Output(G_FILTERS, "value", allow_duplicate=True), Output(G_QUERY, "value", allow_duplicate=True),
+                 Output(JUMP, "data", allow_duplicate=True)]
+                + [Output(c, "value", allow_duplicate=True) for c in CONTROLS])
+
+        @app.callback(*outs, Input("g-url", "search"), prevent_initial_call="initial_duplicate")
+        def apply(search):
+            eid = (parse_qs((search or "").lstrip("?")).get("example") or [None])[0]
+            e = ex.BY_ID.get(eid)
+            if not e:
+                return [no_update] * len(outs)
+            jump = no_update
+            if e.get("jump"):
+                d = ex.resolve_drive(store, e["jump"]["drive"])
+                if d:
+                    jump = {"drive": d, "t0": e["jump"]["t0"], "t1": e["jump"]["t1"]}
+            head = [e["tab"], ex.resolve_drives(store, e["drives"]), e.get("filters", ["running"]), "", jump]
+            return head + [e["set"].get(c, None if c in ("map-a", "map-b") else no_update) for c in CONTROLS]
