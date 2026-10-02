@@ -116,5 +116,5 @@ def note(total, shown, err=None, extra=""):
     return out
 
 
-for _m in ("timeseries", "scatter", "compare", "map3d"):
+for _m in ("timeseries", "scatter", "compare", "map3d", "guide"):
     importlib.import_module(f"{__name__}.{_m}")

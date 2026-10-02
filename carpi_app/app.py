@@ -11,10 +11,6 @@ from .views import G_DRIVES, G_FILTERS, G_QUERY, G_STATUS, JUMP, TABS, VIEWS, si
 
 QUERY_HELP = ("Press Enter to apply. Any column, e.g.  rpm > 3000 and coolant_c >= 80   \u00b7   "
               "abs(lambda_err) > 0.05   \u00b7   iat_c.between(30, 45)   \u00b7   2000 < rpm < 3000")
-GUIDE = ("Pick drives below, then use the tabs: Time series for one drive (click an event to zoom), X vs Y to plot "
-         "any channel against another (click a point to jump to it), Compare drives, and 3-axis map for "
-         "ECU-style tables. Scroll to zoom, double-click to reset.")
-
 
 def sidebar(store):
     newest = [o["value"] for o in store.options()[:5]]
@@ -22,7 +18,7 @@ def sidebar(store):
         html.Div([html.Span("CarPi", className="brand"), html.Span(" Analyzer", className="brand2")],
                  className="title"),
         *([html.P(config.ABOUT, className="about")] if config.PUBLIC and config.ABOUT else []),
-        *([html.Details([html.Summary("How to use"), html.P(GUIDE)], className="guide", open=True)]
+        *([html.P(["New here? Start with the ", html.B("Guide"), " tab."], className="ctl-hint")]
           if config.PUBLIC else []),
         html.Div(id=G_STATUS, className="muted small"),
         html.Label("Drives", className="ctl-label"),
@@ -56,12 +52,14 @@ def create_app(store):
                serve_locally=not config.PUBLIC,
                update_title=None,
                meta_tags=[{"name": "viewport", "content": "width=device-width, initial-scale=1"}])
+    ids = [v.id for v in VIEWS]
+    start_tab = "guide" if config.PUBLIC and "guide" in ids else next(i for i in ids if i != "guide")
     app.layout = html.Div([
         dcc.Store(id=JUMP),
         *sig_stores(),
         sidebar(store),
         html.Main([
-            dcc.Tabs(id=TABS, value=VIEWS[0].id, className="tabs", children=[
+            dcc.Tabs(id=TABS, value=start_tab, className="tabs", mobile_breakpoint=0, children=[
                 dcc.Tab(label=v.label, value=v.id, className="tab", selected_className="tab--on",
                         children=html.Div(v.layout(store), className="pane"))
                 for v in VIEWS]),
