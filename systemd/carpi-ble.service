@@ -7,6 +7,8 @@ Wants=bluetooth.service
 User=carpi
 SupplementaryGroups=bluetooth
 WorkingDirectory=/home/carpi/carpi
+# Bluetooth can come up soft-blocked; "+" runs this one line as root
+ExecStartPre=+/usr/sbin/rfkill unblock bluetooth
 ExecStart=/usr/bin/python3 -u carpi_ble.py
 Restart=always
 RestartSec=5

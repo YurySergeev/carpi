@@ -55,7 +55,7 @@ sudo systemctl enable --now carpi-ble
 journalctl -u carpi-ble -n 20                # want "GATT service registered" and "advertising as CarPi"
 ```
 
-If it says no adapter was found, check `bluetoothctl show` (it should say `Powered: yes`) and run `sudo rfkill unblock bluetooth`.
+The unit runs `rfkill unblock bluetooth` before starting, because a soft-blocked adapter can't be powered on: BlueZ then logs `Failed to set mode: Failed (0x03)`. If it still fails, check `rfkill list` and `bluetoothctl show`. You want `Powered: yes`, not `PowerState: off-blocked`.
 
 ## Pairing the phone (once per phone)
 
