@@ -275,9 +275,33 @@ def set_prop(bus, path, name, value):
     props.Set(ADAPTER, name, value)
 
 
+def get_prop(bus, path, name):
+    return dbus.Interface(bus.get_object(BLUEZ, path), PROPERTIES).Get(ADAPTER, name)
+
+
+ADAPTER_HINT = ("check 'rfkill list', 'bluetoothctl show' and "
+                "'journalctl -u bluetooth -b --no-pager | tail -20'")
+
+
+def step(what, fn, *fn_args, fatal=True, hint=ADAPTER_HINT):
+    """Run one setup call; on a BlueZ error say which step failed instead of a bare traceback.
+    Fatal steps exit (systemd retries in 5 s); the others just log a warning."""
+    try:
+        fn(*fn_args)
+        return True
+    except dbus.exceptions.DBusException as e:
+        msg = f"{what} failed: {e.get_dbus_name()}: {e.get_dbus_message()}"
+        if hint:
+            msg += f"\n  {hint}"
+        if fatal:
+            sys.exit(msg)
+        log(f"warning: {msg}")
+        return False
+
+
 def open_pairing_window(bus, adapter, seconds):
-    set_prop(bus, adapter, "PairableTimeout", dbus.UInt32(seconds))
-    set_prop(bus, adapter, "Pairable", dbus.Boolean(True))
+    step("setting PairableTimeout", set_prop, bus, adapter, "PairableTimeout", dbus.UInt32(seconds))
+    step("making the adapter pairable", set_prop, bus, adapter, "Pairable", dbus.Boolean(True))
     print(f"CarPi is pairable for {seconds} s. On the phone, open the config page, tap Connect,\n"
           f"pick CarPi and accept the pairing prompt.")
 
@@ -301,9 +325,14 @@ def main():
         open_pairing_window(bus, adapter, args.pair)
         return
 
-    set_prop(bus, adapter, "Powered", dbus.Boolean(True))
-    set_prop(bus, adapter, "Pairable", dbus.Boolean(False))
-    set_prop(bus, adapter, "Alias", dbus.String(args.name))
+    log(f"using adapter {adapter}")
+    if not get_prop(bus, adapter, "Powered"):
+        step("powering on the adapter", set_prop, bus, adapter, "Powered", dbus.Boolean(True))
+    if get_prop(bus, adapter, "Pairable"):    # the pairing gate: must be closed outside --pair
+        step("turning pairing off", set_prop, bus, adapter, "Pairable", dbus.Boolean(False))
+    if get_prop(bus, adapter, "Alias") != args.name:
+        step(f"renaming the adapter to {args.name}", set_prop, bus, adapter, "Alias",
+             dbus.String(args.name), fatal=False, hint=None)
 
     store = carpi_presets.Store(args.home)
     controller = carpi_control.Controller(store, args.status_file)
@@ -325,8 +354,11 @@ def main():
         return cb
 
     agents = dbus.Interface(bus.get_object(BLUEZ, "/org/bluez"), AGENT_MANAGER)
-    agents.RegisterAgent(agent.path, "NoInputNoOutput")
-    agents.RequestDefaultAgent(agent.path)
+    pair_hint = "already-paired phones still work; new pairings may not"
+    if step("registering the pairing agent", agents.RegisterAgent, agent.path, "NoInputNoOutput",
+            fatal=False, hint=pair_hint):
+        step("making it the default agent", agents.RequestDefaultAgent, agent.path,
+             fatal=False, hint=pair_hint)
     adapter_obj = bus.get_object(BLUEZ, adapter)
     dbus.Interface(adapter_obj, GATT_MANAGER).RegisterApplication(
         app.get_path(), {}, reply_handler=lambda: log("GATT service registered"),
