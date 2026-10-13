@@ -57,7 +57,7 @@ journalctl -u carpi-ble -n 20                # want "GATT service registered" an
 
 The unit runs `rfkill unblock bluetooth` before starting, because a soft-blocked adapter can't be powered on: BlueZ then logs `Failed to set mode: Failed (0x03)`. If it still fails, check `rfkill list` and `bluetoothctl show`. You want `Powered: yes`, not `PowerState: off-blocked`.
 
-On Raspberry Pi OS 13, BlueZ refuses every advertisement, its own `bluetoothctl advertise on` included. `bluetoothd` then logs `Failed to add advertisement: Invalid Parameters (0x0d)`. When that happens, the service adds the advertisement directly to the kernel with `btmgmt add-adv`. That's why the unit grants `CAP_NET_ADMIN`. The log then says `advertising as CarPi (btmgmt add-adv -c -g -n)`. BlueZ still handles the connection, pairing and the GATT service.
+On Raspberry Pi OS 13, BlueZ refuses every advertisement, its own `bluetoothctl advertise on` included. `bluetoothd` then logs `Failed to add advertisement: Invalid Parameters (0x0d)`. When that happens, the service adds the advertisement directly to the kernel over its Bluetooth management socket (`carpi_mgmt.py`, the same thing `btmgmt add-adv` does). That's why the unit grants `CAP_NET_ADMIN`. The log then says `advertising as CarPi (via kernel: connectable, discoverable, name)`. BlueZ still handles the connection, pairing and the GATT service.
 
 ## Pairing the phone (once per phone)
 

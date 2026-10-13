@@ -13,9 +13,9 @@ BlueZ over D-Bus, standard Raspberry Pi OS packages only:
 
 Advertising: BlueZ's own advertising API is tried first. On Raspberry Pi OS 13 it is refused for
 every advertisement (bluetoothd: "Failed to add advertisement: Invalid Parameters (0x0d)", even
-for 'bluetoothctl advertise on'), so the service falls back to adding the advertisement straight
-to the kernel with btmgmt, which works. That needs CAP_NET_ADMIN (AmbientCapabilities in
-systemd/carpi-ble.service). BlueZ still handles connections, pairing and the GATT service.
+for 'bluetoothctl advertise on'), so the service falls back to adding it straight to the kernel
+over the management socket (carpi_mgmt.py, what btmgmt does), which works. That needs
+CAP_NET_ADMIN (AmbientCapabilities in systemd/carpi-ble.service). BlueZ still handles connections, pairing and the GATT service.
 
 Security: both characteristics need an encrypted (paired) link, and the Pi only accepts new
 pairings during a short window you open yourself over SSH:
@@ -23,9 +23,7 @@ pairings during a short window you open yourself over SSH:
 Phones paired before keep working after the window closes.
 """
 import argparse
-import shutil
 import signal
-import subprocess
 import sys
 
 import dbus
@@ -35,6 +33,7 @@ import dbus.service
 from gi.repository import GLib
 
 import carpi_control
+import carpi_mgmt
 import carpi_presets
 
 BLUEZ = "org.bluez"
@@ -51,7 +50,7 @@ AGENT = "org.bluez.Agent1"
 
 ROOT = "/org/carpi"
 DEFAULT_MTU = 23
-MGMT_INSTANCE = 1                 # advertising slot used when going through btmgmt
+MGMT_INSTANCE = 1                 # advertising slot used when going through the kernel
 
 
 def log(msg):
@@ -308,27 +307,28 @@ def step(what, fn, *fn_args, fatal=True, hint=ADAPTER_HINT):
         return False
 
 
-def btmgmt(hci, *cmd):
-    """Run one btmgmt command; returns its combined output ("" if it couldn't run)."""
-    exe = shutil.which("btmgmt") or "/usr/bin/btmgmt"
-    try:
-        r = subprocess.run([exe, "-i", hci, *cmd], capture_output=True, text=True, timeout=10)
-    except (OSError, subprocess.TimeoutExpired) as e:
-        log(f"btmgmt {' '.join(cmd)}: {e}")
-        return ""
-    return (r.stdout + r.stderr).strip()
-
-
-def kernel_advertise(hci):
+def kernel_advertise(index):
     """Add CarPi's advertisement straight to the kernel: connectable, general discoverable, the
-    adapter name ("CarPi") in the scan response. Plain connectable as a fallback. Returns the
-    options that worked, or None. btmgmt exits 0 even when refused, so the output is checked."""
-    for opts in (["-c", "-g", "-n"], ["-c"]):
-        out = btmgmt(hci, "add-adv", *opts, "-u", carpi_control.SERVICE_UUID, str(MGMT_INSTANCE))
-        if "Instance added" in out:
-            return " ".join(opts)
-        log(f"btmgmt add-adv {' '.join(opts)} refused: {out.splitlines()[-1] if out else 'no output'}")
+    adapter name ("CarPi") in the scan response; plain connectable as a fallback. Returns a label
+    for what worked, or None."""
+    adv = carpi_mgmt.uuid128_ad(carpi_control.SERVICE_UUID)
+    tries = [("connectable, discoverable, name",
+              carpi_mgmt.CONNECTABLE | carpi_mgmt.GENERAL_DISCOVERABLE | carpi_mgmt.LOCAL_NAME),
+             ("connectable", carpi_mgmt.CONNECTABLE)]
+    for label, flags in tries:
+        try:
+            carpi_mgmt.send(index, carpi_mgmt.add_advertising(MGMT_INSTANCE, flags, adv))
+            return label
+        except (carpi_mgmt.MgmtError, OSError) as e:
+            log(f"kernel advertising ({label}) refused: {e}")
     return None
+
+
+def kernel_unadvertise(index):
+    try:
+        carpi_mgmt.send(index, carpi_mgmt.remove_advertising(MGMT_INSTANCE))
+    except (carpi_mgmt.MgmtError, OSError) as e:
+        log(f"removing the advertisement: {e}")
 
 
 def open_pairing_window(bus, adapter, seconds):
@@ -395,17 +395,17 @@ def main():
     dbus.Interface(adapter_obj, GATT_MANAGER).RegisterApplication(
         app.get_path(), {}, reply_handler=lambda: log("GATT service registered"),
         error_handler=failed("RegisterApplication"))
-    hci = str(adapter).rsplit("/", 1)[-1]
-    kernel_ad = []                          # set once the btmgmt fallback is in use
+    index = int(str(adapter).rsplit("hci", 1)[-1])    # /org/bluez/hci0 -> 0
+    kernel_ad = []                          # set once the kernel fallback is in use
 
     def bluez_refused(error):
         log(f"BlueZ advertising refused ({error.get_dbus_message()}); using the kernel directly")
-        opts = kernel_advertise(hci)
-        if opts is None:
-            failed("advertising")("btmgmt refused too (does the unit grant CAP_NET_ADMIN?)")
+        how = kernel_advertise(index)
+        if how is None:
+            failed("advertising")("the kernel refused too (does the unit grant CAP_NET_ADMIN?)")
             return
-        kernel_ad.append(opts)
-        log(f"advertising as {args.name} (btmgmt add-adv {opts})")
+        kernel_ad.append(how)
+        log(f"advertising as {args.name} (via kernel: {how})")
 
     dbus.Interface(adapter_obj, AD_MANAGER).RegisterAdvertisement(
         ad.get_path(), {}, reply_handler=lambda: log(f"advertising as {args.name}"),
@@ -427,7 +427,7 @@ def main():
         loop.run()
     finally:
         if kernel_ad:                      # BlueZ doesn't know about this one: remove it ourselves
-            btmgmt(hci, "rm-adv", str(MGMT_INSTANCE))
+            kernel_unadvertise(index)
         try:
             agents.UnregisterAgent(agent.path)
         except dbus.exceptions.DBusException:
