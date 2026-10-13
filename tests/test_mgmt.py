@@ -20,6 +20,13 @@ def test_add_advertising_packet():
     assert pkt[17:] == adv
 
 
+def test_le_only_advertisement_fits():
+    adv = m.flags_ad(m.AD_GENERAL_DISCOVERABLE | m.AD_NO_BREDR) + m.uuid128_ad(carpi_control.SERVICE_UUID)
+    assert adv[:3] == bytes([2, 0x01, 0x06]) and len(adv) == 21 <= 31
+    _, params = m.add_advertising(1, m.CONNECTABLE | m.LOCAL_NAME, adv)
+    assert params[1] == 0x41 and params[1] & m.GENERAL_DISCOVERABLE == 0   # kernel not managing flags
+
+
 def test_reply_status_matches_only_our_command():
     complete = struct.pack("<HHHHB", m.EV_CMD_COMPLETE, 0, 4, m.OP_ADD_ADVERTISING, 0x00) + b"\x01"
     status = struct.pack("<HHHHB", m.EV_CMD_STATUS, 0, 3, m.OP_ADD_ADVERTISING, 0x0D)

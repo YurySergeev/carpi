@@ -25,6 +25,10 @@ CONNECTABLE = 1 << 0
 GENERAL_DISCOVERABLE = 1 << 1      # the kernel writes the AD flags field
 LOCAL_NAME = 1 << 6                # the kernel puts the adapter name in the scan response
 
+# AD "Flags" field bits, for when we write that field ourselves
+AD_GENERAL_DISCOVERABLE = 0x02
+AD_NO_BREDR = 0x04                 # "LE only": the phone pairs over LE instead of classic Bluetooth
+
 STATUS = {0x00: "Success", 0x01: "Unknown Command", 0x03: "Failed", 0x0A: "Busy",
           0x0B: "Rejected", 0x0C: "Not Supported", 0x0D: "Invalid Parameters",
           0x0F: "Not Powered", 0x11: "Invalid Index", 0x14: "Permission Denied"}
@@ -36,6 +40,12 @@ class MgmtError(RuntimeError):
 
 class _SockaddrHci(ctypes.Structure):
     _fields_ = [("family", ctypes.c_ushort), ("dev", ctypes.c_ushort), ("channel", ctypes.c_ushort)]
+
+
+def flags_ad(bits):
+    """AD structure "Flags" (type 0x01). Only valid when the kernel isn't managing the flags,
+    i.e. without GENERAL_DISCOVERABLE in the Add Advertising flags."""
+    return bytes([2, 0x01, bits])
 
 
 def uuid128_ad(uuid_str):

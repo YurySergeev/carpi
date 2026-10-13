@@ -308,14 +308,22 @@ def step(what, fn, *fn_args, fatal=True, hint=ADAPTER_HINT):
 
 
 def kernel_advertise(index):
-    """Add CarPi's advertisement straight to the kernel: connectable, general discoverable, the
-    adapter name ("CarPi") in the scan response; plain connectable as a fallback. Returns a label
-    for what worked, or None."""
-    adv = carpi_mgmt.uuid128_ad(carpi_control.SERVICE_UUID)
-    tries = [("connectable, discoverable, name",
-              carpi_mgmt.CONNECTABLE | carpi_mgmt.GENERAL_DISCOVERABLE | carpi_mgmt.LOCAL_NAME),
-             ("connectable", carpi_mgmt.CONNECTABLE)]
-    for label, flags in tries:
+    """Add CarPi's advertisement straight to the kernel: connectable, LE only, general
+    discoverable, the adapter name ("CarPi") in the scan response. Returns a label for what
+    worked, or None.
+
+    "LE only" matters: the Pi's chip also does classic Bluetooth, and a phone that sees a
+    dual-mode device pairs over classic, which the Pi doesn't accept, so pairing fails with
+    "failed to connect". With the kernel managing the flags it leaves that bit off, so the first
+    try writes the Flags field itself."""
+    uuid_ad = carpi_mgmt.uuid128_ad(carpi_control.SERVICE_UUID)
+    le_only = carpi_mgmt.flags_ad(carpi_mgmt.AD_GENERAL_DISCOVERABLE | carpi_mgmt.AD_NO_BREDR)
+    tries = [("LE only, discoverable, name",
+              carpi_mgmt.CONNECTABLE | carpi_mgmt.LOCAL_NAME, le_only + uuid_ad),
+             ("connectable, discoverable, name",
+              carpi_mgmt.CONNECTABLE | carpi_mgmt.GENERAL_DISCOVERABLE | carpi_mgmt.LOCAL_NAME, uuid_ad),
+             ("connectable", carpi_mgmt.CONNECTABLE, uuid_ad)]
+    for label, flags, adv in tries:
         try:
             carpi_mgmt.send(index, carpi_mgmt.add_advertising(MGMT_INSTANCE, flags, adv))
             return label
