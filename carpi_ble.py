@@ -23,6 +23,7 @@ pairings during a short window you open yourself over SSH:
 Phones paired before keep working after the window closes.
 """
 import argparse
+import json
 import signal
 import sys
 
@@ -164,14 +165,18 @@ class TxCharacteristic(Characteristic):
 
     @dbus.service.method(GATT_CHRC)
     def StartNotify(self):
+        if not self.notifying:
+            log("phone subscribed to replies")
         self.notifying = True
 
     @dbus.service.method(GATT_CHRC)
     def StopNotify(self):
+        log("phone unsubscribed from replies")
         self.notifying = False
 
     def send(self, data, mtu):
         if not self.notifying:
+            log("reply dropped: no phone is subscribed to replies")
             return False
         for chunk in carpi_control.chunks(data, max(20, mtu - 3)):
             self.PropertiesChanged(GATT_CHRC, {"Value": dbus.Array(chunk, signature="y")}, [])
@@ -194,7 +199,17 @@ class RxCharacteristic(Characteristic):
         buf = self.buffers.setdefault(device, carpi_control.LineBuffer())
         for line in buf.feed(bytes(value)):
             reply = self.controller.handle_line(line)
+            cmd = _cmd(line)
+            if cmd != "status":                       # polled every 3 s: too chatty to log
+                log(f"{cmd} from {device.rsplit('/', 1)[-1]}: {len(reply)} byte reply, mtu {mtu}")
             GLib.idle_add(self.tx.send, reply, mtu)   # after WriteValue has returned
+
+
+def _cmd(line):
+    try:
+        return str(json.loads(line).get("cmd"))
+    except (ValueError, AttributeError):
+        return "unreadable request"
 
 
 class Advertisement(dbus.service.Object):

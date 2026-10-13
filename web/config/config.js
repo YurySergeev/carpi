@@ -7,7 +7,8 @@ const SERVICE = "6c2a0001-4f3b-4d1e-9a57-3c8e2b7d5f10";
 const RX = "6c2a0002-4f3b-4d1e-9a57-3c8e2b7d5f10";   // we write requests
 const TX = "6c2a0003-4f3b-4d1e-9a57-3c8e2b7d5f10";   // CarPi notifies replies
 const CHUNK = 180;              // bytes per write; longer writes are split by the phone's BLE stack
-const REPLY_TIMEOUT_MS = 15000;
+const RETRY_AFTER_MS = 6000;    // no reply by then: subscribe to replies again and resend once
+const REPLY_TIMEOUT_MS = 10000;
 const STATUS_EVERY_MS = 3000;
 const DEFAULT_REQ_PER_S = 100;  // measured on the A3: ~7.7 rows/s x 13 requests
 const DEFAULT_HZ = 10;          // carpi_logger.py --hz
@@ -53,16 +54,26 @@ class BleLink {
       this.device = await navigator.bluetooth.requestDevice({ filters: [{ services: [SERVICE] }] });
       this.device.addEventListener("gattserverdisconnected", () => this.closed());
     }
-    const server = await this.device.gatt.connect();
-    const service = await server.getPrimaryService(SERVICE);
+    await this.device.gatt.connect();
+    await this.subscribe();                 // first encrypted access: Android shows the pairing prompt
+    await this.write(enc.encode("\n"));     // flush a half line the Pi may hold from a dropped link
+  }
+
+  // (Re)look up the characteristics and subscribe to replies. Also used when a reply goes
+  // missing: on the first connection after pairing Android re-reads the services, which can
+  // leave the old subscription dead.
+  async subscribe() {
+    const service = await this.device.gatt.getPrimaryService(SERVICE);
     this.rx = await service.getCharacteristic(RX);
     const tx = await service.getCharacteristic(TX);
-    if (this.tx) this.tx.removeEventListener("characteristicvaluechanged", this.onData);
+    if (this.tx) {
+      this.tx.removeEventListener("characteristicvaluechanged", this.onData);
+      if (this.tx === tx) { try { await tx.stopNotifications(); } catch { /* already off */ } }
+    }
     this.tx = tx;
     tx.addEventListener("characteristicvaluechanged", this.onData);
-    await tx.startNotifications();          // first encrypted access: Android shows the pairing prompt
-    this.buf = new Uint8Array(0);
-    await this.write(enc.encode("\n"));     // flush a half line the Pi may hold from a dropped link
+    await tx.startNotifications();
+    this.buf = new Uint8Array(0);           // a half-received reply is useless now
   }
 
   disconnect() { if (this.connected) this.device.gatt.disconnect(); }
@@ -101,19 +112,32 @@ class BleLink {
     const rid = ++this.rid;
     const line = enc.encode(JSON.stringify({ rid, cmd, ...args }) + "\n");
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pending.delete(rid);
-        reject(new Error("No reply from CarPi"));
-      }, REPLY_TIMEOUT_MS);
+      let timer;
+      const arm = (ms, fn) => { clearTimeout(timer); timer = setTimeout(fn, ms); };
       this.pending.set(rid, {
         resolve: (v) => { clearTimeout(timer); resolve(v); },
         reject: (e) => { clearTimeout(timer); reject(e); },
       });
       // one request on the wire at a time, so chunks of two requests never interleave
-      this.queue = this.queue.then(() => this.write(line)).catch((e) => {
-        const p = this.pending.get(rid);
-        if (p) { this.pending.delete(rid); p.reject(e); }
+      const send = () => {
+        this.queue = this.queue.then(() => this.write(line)).catch((e) => {
+          const p = this.pending.get(rid);
+          if (p) { this.pending.delete(rid); p.reject(e); }
+        });
+      };
+      // No reply in time: subscribe again and resend once. Every command is safe to repeat, and
+      // both copies carry the same rid, so whichever reply arrives first wins.
+      arm(RETRY_AFTER_MS, async () => {
+        if (!this.pending.has(rid)) return;
+        try { await this.subscribe(); } catch { /* the resend may still get through */ }
+        if (!this.pending.has(rid)) return;
+        arm(REPLY_TIMEOUT_MS, () => {
+          this.pending.delete(rid);
+          reject(new Error("No reply from CarPi"));
+        });
+        send();
       });
+      send();
     });
   }
 }
