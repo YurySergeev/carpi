@@ -1,0 +1,22 @@
+# Logger, presets and Bluetooth-protocol tests (the viewer's own tests run in pages.yml).
+name: Logger tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - run: pip install python-can pytest
+      - run: python -m pytest tests -q

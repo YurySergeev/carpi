@@ -9,6 +9,9 @@ WorkingDirectory=/home/carpi/carpi
 ExecStart=/usr/bin/python3 -u carpi_logger.py
 Restart=always
 RestartSec=5
+# /run/carpi/status.json for carpi_ble.py (tmpfs, kept across logger restarts)
+RuntimeDirectory=carpi
+RuntimeDirectoryPreserve=yes
 
 [Install]
 WantedBy=multi-user.target

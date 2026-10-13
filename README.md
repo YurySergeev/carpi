@@ -23,7 +23,8 @@ It took two tries. In July, a passive `candump` on the OBD port showed exactly o
 - **Logs automatically.** It detects when the engine starts, opens a new CSV, and closes it when the ignition goes off. Nothing to start by hand.
 - **Won't drain the battery.** It never transmits while the car's bus is asleep.
 - **Survives power cuts.** The car's USB port dies instantly at ignition-off; `fsync` every 5 s and atomic metadata writes mean at most a few seconds are lost.
-- **Runs as systemd services**, and depends on nothing but `python-can`.
+- **Lets the phone choose what to log.** Over Bluetooth LE, a small web app picks a preset: which values to read and how often, as a weight per value. Changing presets mid-drive closes the file and starts a new one. [docs/phone-config.md](docs/phone-config.md)
+- **Runs as systemd services.** The logger depends on nothing but `python-can`.
 
 How the polling, ISO-TP and state machine work: [docs/how-it-works.md](docs/how-it-works.md)
 
@@ -62,13 +63,15 @@ sudo systemctl enable --now can0 carpi-logger
 
 The logger unit assumes user `carpi` and the repo at `/home/carpi/carpi`. Adjust `systemd/carpi-logger.service` if yours differ.
 
+**3. Optional: phone config over Bluetooth.** Install `python3-dbus python3-gi`, enable `carpi-ble.service`, and pair the phone once. Steps: [docs/phone-config.md](docs/phone-config.md).
+
 ## Usage
 
 With the Pi plugged in and powered, every engine start becomes a new CSV in a folder per day: `~/carpi/logs/2026-09-26/drive-231349.csv`.
 
 ```bash
 journalctl -u carpi-logger -f               # watch it live
-echo post-pcv > ~/carpi/tag.txt             # label upcoming drives for before/after comparisons
+echo post-pcv > ~/carpi/tag.txt             # label upcoming drives (or set it from the phone page)
 scp -r "carpi@carpi.local:~/carpi/logs/*" . # pull the day folders to a PC
 ```
 
@@ -99,6 +102,7 @@ Full report: [docs/baseline-2026-09-25.md](docs/baseline-2026-09-25.md)
 - [ ] Drive-summary script: per-drive report and before/after comparison by tag
 - [ ] Full-throttle baseline pulls before the tune
 - [ ] VW-specific data over UDS: per-cylinder knock retard, oil temperature, DSG temperature
+- [x] Choose what to log per drive from the phone (Bluetooth LE)
 - [ ] Live dashboard
 
 ## A note on safety

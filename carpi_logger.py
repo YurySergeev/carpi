@@ -8,9 +8,14 @@ Runs forever as a systemd service and writes one CSV per drive.
           Pi can't keep the car awake and drain the battery.
   DETECT  Bus traffic seen (e.g. the gateway keep-alive 0x17F00010) -> ask the
           engine ECU if it's on. Limited number of tries per wake-up.
-  LOG     Engine answered -> read its supported PIDs, open a new CSV, poll the
-          fast PIDs every loop and one slow PID per loop (round-robin).
+  LOG     Engine answered -> read its supported PIDs, open a new CSV, poll the values
+          in the active preset, each as often as its weight says (carpi_presets.py).
   END     Engine silent for --end-after seconds (ignition off) -> close the file.
+
+Presets: ~/carpi/active_preset.json picks the values and their weights (set from the phone
+through carpi_ble.py; no file = the built-in default, the original 12 fast + 12 slow PIDs). If it
+changes mid-drive, the current CSV is closed ("ended_by": "preset_change") and a new one starts
+right away with the new values ("follows": the previous file).
 
 Output (default ~/carpi/logs/), one folder per day, e.g. logs/2026-09-26/:
   drive-HHMMSS.csv    one row per poll loop; slow columns are blank on rows where
@@ -24,7 +29,11 @@ Output (default ~/carpi/logs/), one folder per day, e.g. logs/2026-09-26/:
 Tag drives for before/after comparisons by putting one word in ~/carpi/tag.txt
 (e.g. "pre-pcv"). The tag is copied into each new drive's metadata.
 
-Read-only: standard OBD-II Mode 01 requests only, same as any scan tool.
+Status for the phone: /run/carpi/status.json (state, current file, rows, request rate), on
+tmpfs so it costs the SD card nothing.
+
+Read-only: standard OBD-II Mode 01 requests only, same as any scan tool. A preset can only
+choose among the PIDs below.
 """
 import argparse
 import csv
@@ -36,6 +45,8 @@ from datetime import datetime
 from pathlib import Path
 
 import can
+
+import carpi_presets
 
 FUNCTIONAL_ID = 0x7DF   # "any OBD ECU"
 ENGINE_TX = 0x7E0       # physical request ID for the engine ECU (also where flow control goes)
@@ -50,6 +61,8 @@ FSYNC_EVERY = 5.0
 META_EVERY = 30.0      # refresh the .json so a power cut loses at most this much metadata
 CLOCK_SYNCED = Path("/run/systemd/timesync/synchronized")  # exists once NTP has set the clock
 STATUS_EVERY = 15.0
+PRESET_CHECK_EVERY = 1.0
+STATUS_FILE_EVERY = 2.0
 
 
 def u16(d, i):
@@ -87,12 +100,37 @@ PIDS = {
     0x70: [("boost_cmd_kpa", lambda d: u16(d, 1) / 32 if d[0] & 0x01 else None),
            ("boost_act_kpa", lambda d: u16(d, 3) / 32 if d[0] & 0x02 else None)],
 }
-FAST = [0x0C, 0x0B, 0x70, 0x04, 0x0E, 0x06, 0x44, 0x34, 0x23, 0x49, 0x11, 0x0D]
-SLOW = [0x05, 0x0F, 0x07, 0x42, 0x33, 0x46, 0x2F, 0x3C, 0x15, 0x56, 0x43, 0x1F]
+assert {f"{p:02X}" for p in PIDS} == set(carpi_presets.CATALOG), "PIDS and CATALOG disagree"
 
 
 def log(msg):
     print(f"{datetime.now():%H:%M:%S} {msg}", flush=True)
+
+
+class StatusFile:
+    """Small JSON snapshot for carpi_ble.py. Best effort: a missing or read-only folder just
+    means no status, never a logger crash."""
+
+    def __init__(self, path):
+        self.path = Path(path).expanduser() if path else None
+        self.fields = {"state": "waiting", "req_per_s": None}
+        self.last = 0.0
+        self.warned = False
+
+    def update(self, force=False, **fields):
+        self.fields.update(fields)
+        now = time.monotonic()
+        if self.path is None or (not force and now - self.last < STATUS_FILE_EVERY):
+            return
+        self.last = now
+        try:
+            tmp = self.path.with_name(self.path.name + ".tmp")
+            tmp.write_text(json.dumps(dict(self.fields, updated=time.time())))
+            os.replace(tmp, self.path)
+        except OSError as e:
+            if not self.warned:
+                log(f"status file {self.path} not writable ({e}); phone status off")
+                self.warned = True
 
 
 class Engine:
@@ -102,6 +140,7 @@ class Engine:
         self.bus = bus
         self.req_id = ENGINE_TX
         self.last_activity = 0.0
+        self.requests = 0
 
     def recv(self, timeout):
         rx = self.bus.recv(timeout=timeout)
@@ -124,6 +163,7 @@ class Engine:
     def request(self, pid, service=0x01):
         """One Mode 01 request. Returns the data bytes after the PID, or None."""
         self.drain()
+        self.requests += 1
         if not self._send(self.req_id, [0x02, service, pid]):
             return None
         deadline = time.monotonic() + REPLY_TIMEOUT
@@ -208,12 +248,49 @@ def new_drive_stem(daydir, started):
     return stem
 
 
-def log_drive(engine, args):
+def choose_preset(args, supported):
+    """(preset as read from the file, preset in use, {pid: weight} for PIDs the car answers to).
+    The first is what a mid-drive change is compared against; the second can be the default
+    when the file is bad or names nothing this car supports."""
+    source = carpi_presets.read_active(Path(args.preset_file).expanduser())
+    if source is None:
+        log(f"{args.preset_file} unreadable or invalid; using the default preset")
+    for preset in ([source] if source else []) + [carpi_presets.DEFAULT]:
+        weights = {int(k, 16): w for k, w in preset["weights"].items() if int(k, 16) in supported}
+        if weights:
+            if preset is not source and source is not None:
+                log(f"the car supports none of preset '{source['name']}'; using the default")
+            return source, preset, weights
+    return source, carpi_presets.DEFAULT, {}
+
+
+def save_supported(args, supported):
+    """Remember what the car answers to, so the phone can grey out the rest even when the
+    engine is off. Written only when it changes."""
+    path = Path(args.supported_file).expanduser()
+    data = {"pids": sorted(f"{p:02X}" for p in supported)}
+    if carpi_presets.read_json(path) != data:
+        try:
+            carpi_presets.atomic_write(path, json.dumps(data))
+        except OSError as e:
+            log(f"couldn't save {path}: {e}")
+
+
+def log_drive(engine, args, status, follows=None):
+    """Log one drive (or one segment of it). Returns (how it ended, CSV name or None if nothing
+    was saved). Ends on engine silence or, with "preset_change", when the active preset changes."""
     started = datetime.now()
     supported = engine.supported()
-    fast = [p for p in FAST if p in supported]
-    slow = [p for p in SLOW if p in supported]
-    columns = ["time", "elapsed_s", "clock_ok"] + [c for p in fast + slow for c, _ in PIDS[p]]
+    save_supported(args, supported)
+    source, preset, weights = choose_preset(args, supported)
+    if not weights:
+        log("the car supports none of the known PIDs; nothing to log")
+        time.sleep(args.end_after)
+        return "no_values", None
+    pids = list(weights)
+    top = max(weights.values())
+    schedule = carpi_presets.Schedule(weights)
+    columns = ["time", "elapsed_s", "clock_ok"] + [c for p in pids for c, _ in PIDS[p]]
 
     daydir = Path(args.logdir).expanduser() / f"{started:%Y-%m-%d}"
     daydir.mkdir(parents=True, exist_ok=True)
@@ -224,27 +301,33 @@ def log_drive(engine, args):
         "tag": read_tag(Path(args.tag_file).expanduser()),
         "request_id": f"0x{engine.req_id:X}",
         "supported_pids": sorted(f"{p:02X}" for p in supported),
-        "fast_pids": [f"{p:02X}" for p in fast],
-        "slow_pids": [f"{p:02X}" for p in slow],
+        "preset": {"id": preset["id"], "name": preset["name"]},
+        "weights": {f"{p:02X}": w for p, w in weights.items()},
+        "fast_pids": [f"{p:02X}" for p in pids if weights[p] == top],     # read on every row
+        "slow_pids": [f"{p:02X}" for p in pids if weights[p] < top],
     }
+    if follows:
+        meta["follows"] = follows
     write_meta(meta_path, meta)
-    log(f"drive started -> {daydir.name}/{csv_path.name} (tag '{meta['tag']}', "
-        f"{len(fast)} fast + {len(slow)} slow PIDs via 0x{engine.req_id:X})")
+    name = f"{daydir.name}/{csv_path.name}"
+    log(f"drive started -> {name} (tag '{meta['tag']}', preset '{preset['name']}', "
+        f"{len(pids)} PIDs via 0x{engine.req_id:X})")
 
-    rows, i = 0, 0
+    rows, ended_by = 0, "stopped"
     t0 = time.monotonic()
-    last_reply = last_sync = last_status = last_meta = t0
+    req0 = engine.requests
+    last_reply = last_sync = last_status = last_meta = last_check = t0
     latest = {}
+    status.update(force=True, state="logging", drive=name, rows=0, elapsed_s=0,
+                  preset=meta["preset"], rows_per_s=None)
     with open(csv_path, "x", newline="", buffering=1) as f:   # "x": never truncate an existing file
         writer = csv.DictWriter(f, fieldnames=columns, restval="")
         writer.writeheader()
         try:
             while True:
                 loop_start = time.monotonic()
-                loop_pids = fast + ([slow[i % len(slow)]] if slow else [])
-                i += 1
                 row = {}
-                for pid in loop_pids:
+                for pid in schedule.next_row():
                     data = engine.request(pid)
                     if data is None:
                         continue
@@ -265,9 +348,17 @@ def log_drive(engine, args):
                     last_reply = now
                     latest.update(row)
                 elif now - last_reply > args.end_after:
+                    ended_by = "engine_off"
                     break
                 else:
                     time.sleep(0.2)
+                if now - last_check > PRESET_CHECK_EVERY:
+                    last_check = now
+                    current = carpi_presets.read_active(Path(args.preset_file).expanduser())
+                    if current is not None and current != source:
+                        log(f"preset changed to '{current['name']}'; starting a new file")
+                        ended_by = "preset_change"
+                        break
                 if now - last_sync > FSYNC_EVERY:
                     os.fsync(f.fileno())
                     last_sync = now
@@ -275,6 +366,11 @@ def log_drive(engine, args):
                     meta.update(rows=rows, duration_s=round(now - t0, 1), complete=False)
                     write_meta(meta_path, meta)
                     last_meta = now
+                elapsed = now - t0
+                if elapsed > 0:
+                    status.update(rows=rows, elapsed_s=round(elapsed, 1),
+                                  rows_per_s=round(rows / elapsed, 2),
+                                  req_per_s=round((engine.requests - req0) / elapsed, 1))
                 time.sleep(max(0.0, 1 / args.hz - (time.monotonic() - loop_start)))
                 if now - last_status > STATUS_EVERY:
                     log(f"  {rows} rows | rpm {latest.get('rpm', '-')} | coolant {latest.get('coolant_c', '-')} C"
@@ -287,12 +383,14 @@ def log_drive(engine, args):
             if rows == 0:
                 csv_path.unlink(missing_ok=True)
                 meta_path.unlink(missing_ok=True)
+                name = None
                 log("engine answered once but no data followed; nothing saved")
             else:
                 meta.update(end=datetime.now().isoformat(timespec="seconds"),
-                            rows=rows, duration_s=duration, complete=True)
+                            rows=rows, duration_s=duration, complete=True, ended_by=ended_by)
                 write_meta(meta_path, meta)
-                log(f"drive ended: {rows} rows, {duration} s -> {daydir.name}/{csv_path.name}")
+                log(f"drive ended ({ended_by}): {rows} rows, {duration} s -> {name}")
+    return ended_by, name
 
 
 def run(args):
@@ -301,10 +399,12 @@ def run(args):
         dict(can_id=KEEPALIVE_ID, can_mask=0x1FFFFFFF, extended=True),
     ])
     engine = Engine(bus)
+    status = StatusFile(args.status_file)
     tries_left = DETECT_TRIES
     was_quiet = True
     drives = 0
     log(f"CarPi logger up on {args.channel}; waiting for the car")
+    status.update(force=True, state="waiting", hz=args.hz)
     try:
         while True:
             rx = engine.recv(1.0)
@@ -313,16 +413,25 @@ def run(args):
                 if quiet_for > QUIET_RESET and not was_quiet:
                     log("bus asleep; detection re-armed")
                     was_quiet, tries_left = True, DETECT_TRIES
+                    status.update(force=True, state="waiting")
+                status.update()
                 continue
             if was_quiet:
                 log("bus awake")
                 was_quiet = False
             if tries_left <= 0:
+                status.update(state="ignition_off")
                 continue                      # car awake but ignition off: stay silent
             tries_left -= 1
+            status.update(state="detecting")
             if engine.detect():
-                log_drive(engine, args)
+                ended_by, follows = log_drive(engine, args, status)
                 drives += 1
+                while ended_by == "preset_change":    # engine still running: no re-detect needed
+                    ended_by, follows = log_drive(engine, args, status, follows)
+                    drives += 1
+                status.update(force=True, state="detecting", drive=None, rows=None,
+                              elapsed_s=None, rows_per_s=None)
                 if args.once:
                     return
                 tries_left = DETECT_TRIES     # catch a quick restart after ignition off
@@ -338,6 +447,10 @@ def main():
     ap.add_argument("--interface", default="socketcan")
     ap.add_argument("--logdir", default="~/carpi/logs")
     ap.add_argument("--tag-file", default="~/carpi/tag.txt")
+    ap.add_argument("--preset-file", default="~/carpi/active_preset.json")
+    ap.add_argument("--supported-file", default="~/carpi/supported.json")
+    ap.add_argument("--status-file", default="/run/carpi/status.json",
+                    help="status snapshot for carpi_ble.py ('' = off)")
     ap.add_argument("--end-after", type=float, default=8.0,
                     help="seconds of engine silence that end a drive")
     ap.add_argument("--hz", type=float, default=10.0, help="max rows per second")

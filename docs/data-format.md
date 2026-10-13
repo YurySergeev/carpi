@@ -4,9 +4,11 @@ Each drive produces two files in a folder for its day, named after the drive's s
 
 ## `drive-HHMMSS.csv`
 
-One row per poll loop, about 7.7 rows/s on this car. Fast columns appear in every row. Slow columns rotate, so each one refreshes about every 1.6 s and is blank on the rows in between (`df.ffill()` fills them).
+One row per poll loop. Which columns exist, and how often each is filled, depends on the drive's preset ([phone-config.md](phone-config.md)). Values at the preset's top weight appear in every row. The others are blank on the rows where they weren't read (`df.ffill()` fills them).
 
-| Column | PID | Decoding (A, B, … = data bytes) | Unit | Rate |
+With the default preset, which matches every drive logged before presets existed, that's about 7.7 rows/s on this car. The "fast" columns below appear in every row. The "slow" ones rotate, so each refreshes about every 1.6 s.
+
+| Column | PID | Decoding (A, B, … = data bytes) | Unit | Rate (default preset) |
 | --- | --- | --- | --- | --- |
 | `time` | — | Pi wall clock | ISO 8601 | every row |
 | `elapsed_s` | — | monotonic seconds since the drive started | s | every row |
@@ -43,8 +45,16 @@ The Pi has no real-time clock, so `time` can be wrong until NTP syncs. Use `elap
 
 ## `drive-HHMMSS.json`
 
-Written when the drive starts: `start`, `tag`, `request_id`, `supported_pids`, `fast_pids`, `slow_pids`.
+Written when the drive starts:
+
+- `start`, `tag`, `request_id`, `supported_pids`
+- `preset` (`id` and `name`), and `weights`: PID → weight for the values actually logged
+- `fast_pids`: values at the top weight, read every row. `slow_pids`: the rest.
+- `follows`: only on a file started by a mid-drive preset change. It names the file before it (`2026-10-06/drive-171502.csv`).
+
 Refreshed every 30 s: `rows`, `duration_s`, `complete`. `"complete": false` means power was cut before the drive ended cleanly.
+
+Written at a clean end: `end`, and `ended_by`. `ended_by` is `engine_off` (normal), `preset_change` (a new file follows), or `stopped` (the service was stopped).
 
 ## Tags
 

@@ -1,0 +1,15 @@
+[Unit]
+Description=CarPi Bluetooth config service (phone picks what the logger records)
+After=bluetooth.service
+Wants=bluetooth.service
+
+[Service]
+User=carpi
+SupplementaryGroups=bluetooth
+WorkingDirectory=/home/carpi/carpi
+ExecStart=/usr/bin/python3 -u carpi_ble.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

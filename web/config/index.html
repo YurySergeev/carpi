@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>CarPi config</title>
+  <meta name="description" content="Pick what CarPi logs on the next drive, over Bluetooth.">
+  <meta name="theme-color" content="#0e0f11">
+  <meta name="robots" content="noindex">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="stylesheet" href="config.css">
+  <script src="config.js" defer></script>
+</head>
+<body>
+  <div class="page">
+    <header class="top">
+      <div>
+        <p class="eyebrow">CarPi</p>
+        <h1>Drive config</h1>
+      </div>
+      <div class="conn">
+        <span class="pill" id="conn-pill"><span class="dot" aria-hidden="true"></span><span id="conn-text">Not connected</span></span>
+        <button class="btn primary" id="connect" type="button">Connect</button>
+      </div>
+    </header>
+
+    <p class="notice" id="no-bt" hidden>
+      This browser can't use Bluetooth. On Android, open this page in Chrome. On iPhone, use the free
+      <strong>Bluefy</strong> browser. <button class="link" id="demo-btn" type="button">Try the demo</button>
+    </p>
+    <p class="notice demo" id="demo-note" hidden>Demo: a simulated CarPi. Nothing here reaches the car.</p>
+
+    <main id="home">
+      <section class="card" id="now" aria-live="polite">
+        <h2>Now</h2>
+        <p class="state" id="state-line">Connect to see what CarPi is doing.</p>
+        <p class="sub" id="state-sub"></p>
+        <form class="tag" id="tag-form">
+          <label for="tag-input">Tag for new drives</label>
+          <div class="row">
+            <input id="tag-input" name="tag" autocomplete="off" autocapitalize="none" spellcheck="false"
+                   maxlength="32" placeholder="e.g. post-pcv" disabled>
+            <button class="btn" id="tag-save" type="submit" disabled>Save</button>
+          </div>
+        </form>
+      </section>
+
+      <section>
+        <div class="section-head">
+          <h2>Presets</h2>
+          <button class="btn" id="new-preset" type="button" disabled>+ New</button>
+        </div>
+        <ul class="presets" id="presets"></ul>
+      </section>
+    </main>
+
+    <main id="editor" hidden>
+      <div class="section-head">
+        <h2 id="editor-title">New preset</h2>
+        <button class="btn ghost" id="editor-close" type="button">Cancel</button>
+      </div>
+      <label class="field" for="preset-name">Name</label>
+      <input id="preset-name" maxlength="32" autocomplete="off" placeholder="e.g. Idle study">
+      <div class="summary" id="summary"></div>
+      <p class="hint">Weight sets how often each value is read. Values at the top weight are read on every row; half the top weight means every other row. 0 turns a value off.</p>
+      <div class="quick">
+        <button class="btn small" type="button" data-fill="0">All off</button>
+        <button class="btn small" type="button" data-fill="default">Like default</button>
+      </div>
+      <div id="values"></div>
+      <div class="editor-actions">
+        <button class="btn" id="save" type="button">Save</button>
+        <button class="btn primary" id="save-apply" type="button">Save &amp; apply</button>
+      </div>
+    </main>
+  </div>
+
+  <dialog id="confirm">
+    <form method="dialog">
+      <p id="confirm-text"></p>
+      <div class="row end">
+        <button class="btn ghost" value="no">Cancel</button>
+        <button class="btn primary" value="yes" id="confirm-yes">OK</button>
+      </div>
+    </form>
+  </dialog>
+  <div class="toast" id="toast" role="status" hidden></div>
+</body>
+</html>
