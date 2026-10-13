@@ -188,20 +188,30 @@ class RxCharacteristic(Characteristic):
             GLib.idle_add(self.tx.send, reply, mtu)   # after WriteValue has returned
 
 
+def ad_variants(name):
+    """Advertisement layouts to try, simplest-that-still-shows-the-name first. The phone finds
+    CarPi by service UUID, so the name is a nicety. Asking for "Discoverable" made the Pi 4's
+    kernel reject the advertisement ("Invalid Parameters (0x0d)"), so the flags are left to it."""
+    return [
+        ("name in advertisement", {"LocalName": dbus.String(name)}),
+        ("name in scan response", {"Includes": dbus.Array(["local-name"], signature="s")}),
+        ("service UUID only", {}),
+    ]
+
+
 class Advertisement(dbus.service.Object):
-    def __init__(self, bus, name):
-        self.path = f"{ROOT}/advertisement0"
-        self.name = name
+    def __init__(self, bus, index, extra):
+        self.path = f"{ROOT}/advertisement{index}"
+        self.extra = extra
         super().__init__(bus, self.path)
 
     def get_path(self):
         return dbus.ObjectPath(self.path)
 
     def get_properties(self):
-        return {AD: {"Type": "peripheral",
-                     "ServiceUUIDs": dbus.Array([carpi_control.SERVICE_UUID], signature="s"),
-                     "LocalName": dbus.String(self.name),
-                     "Discoverable": dbus.Boolean(True)}}
+        return {AD: dict({"Type": "peripheral",
+                          "ServiceUUIDs": dbus.Array([carpi_control.SERVICE_UUID], signature="s")},
+                         **self.extra)}
 
     @dbus.service.method(PROPERTIES, in_signature="s", out_signature="a{sv}")
     def GetAll(self, interface):
@@ -342,7 +352,6 @@ def main():
     rx = RxCharacteristic(bus, 0, service, controller, tx)
     service.characteristics = [rx, tx]
     app.services.append(service)
-    ad = Advertisement(bus, args.name)
     agent = Agent(bus)
 
     loop = GLib.MainLoop()
@@ -363,9 +372,25 @@ def main():
     dbus.Interface(adapter_obj, GATT_MANAGER).RegisterApplication(
         app.get_path(), {}, reply_handler=lambda: log("GATT service registered"),
         error_handler=failed("RegisterApplication"))
-    dbus.Interface(adapter_obj, AD_MANAGER).RegisterAdvertisement(
-        ad.get_path(), {}, reply_handler=lambda: log(f"advertising as {args.name}"),
-        error_handler=failed("RegisterAdvertisement"))
+    ad_manager = dbus.Interface(adapter_obj, AD_MANAGER)
+    variants = ad_variants(args.name)
+    ads = []                               # keep the D-Bus objects alive
+
+    def advertise(i):
+        label, extra = variants[i]
+        ads.append(Advertisement(bus, i, extra))
+
+        def refused(error):
+            log(f"advertisement ({label}) refused: {error}")
+            if i + 1 < len(variants):
+                advertise(i + 1)
+            else:
+                failed("RegisterAdvertisement")(error)
+        ad_manager.RegisterAdvertisement(
+            ads[-1].get_path(), {}, reply_handler=lambda: log(f"advertising as {args.name} ({label})"),
+            error_handler=refused)
+
+    advertise(0)
 
     def bluez_owner(owner):
         if not owner:                      # bluetoothd restarted: our registrations are gone
