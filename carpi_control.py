@@ -4,8 +4,8 @@ so it can be tested anywhere.
 
 Transport: the phone writes UTF-8 JSON lines (each ending in "\\n") to the RX characteristic, in
 chunks of any size; the Pi answers with one JSON line per request as notifications on TX, split
-to fit the link's MTU. Splitting on newlines makes the framing independent of how BLE chunks
-the bytes.
+into pieces of notify_size(mtu) bytes and sent a few ms apart. Splitting on newlines makes the
+framing independent of how BLE chunks the bytes.
 
 Requests:  {"rid": 7, "cmd": "<name>", ...}       Replies: {"rid": 7, "ok": true, ...}
                                                             {"rid": 7, "ok": false, "error": "..."}
@@ -35,6 +35,7 @@ SERVICE_UUID = "6c2a0001-4f3b-4d1e-9a57-3c8e2b7d5f10"
 RX_UUID = "6c2a0002-4f3b-4d1e-9a57-3c8e2b7d5f10"      # phone writes requests here
 TX_UUID = "6c2a0003-4f3b-4d1e-9a57-3c8e2b7d5f10"      # Pi notifies replies here
 MAX_LINE = 4096
+NOTIFY_MAX = 244        # bytes per reply notification: fits one LE data packet (251 - 4 L2CAP - 3 ATT)
 STATUS_STALE_S = 10.0
 
 
@@ -60,6 +61,12 @@ class LineBuffer:
 
 def chunks(data, size):
     return [data[i:i + size] for i in range(0, len(data), size)] or [b""]
+
+
+def notify_size(mtu):
+    """Bytes per notification for a link with this ATT MTU: MTU - 3, capped at NOTIFY_MAX,
+    never under the 20 every link allows."""
+    return max(20, min(int(mtu) - 3, NOTIFY_MAX))
 
 
 def catalog():

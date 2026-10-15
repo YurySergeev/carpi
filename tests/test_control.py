@@ -95,3 +95,13 @@ def test_status_reply_with_real_sampler_is_small(tmp_path):
     ctl = cc.Controller(cp.Store(tmp_path), tmp_path / "status.json", system=s.snapshot)
     out = ctl.handle_line(json.dumps({"rid": 1, "cmd": "status"}))
     assert len(out) < 1500          # a handful of notifications at a typical phone MTU
+
+
+def test_notify_size_caps_at_one_radio_packet():
+    assert cc.notify_size(23) == 20            # default ATT MTU
+    assert cc.notify_size(185) == 182          # iOS-sized MTU: fits under the cap
+    assert cc.notify_size(517) == cc.NOTIFY_MAX == 244   # Android's 517: capped
+    assert cc.notify_size(5) == 20
+    reply = b"x" * 3985 + b"\n"
+    pieces = cc.chunks(reply, cc.notify_size(517))
+    assert len(pieces) == 17 and b"".join(pieces) == reply and max(map(len, pieces)) == 244

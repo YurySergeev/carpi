@@ -253,3 +253,15 @@ dialog p { margin: 0 0 1rem; color: var(--head); }
 .power.crit { color: var(--warn); font-weight: 600; }
 .is-off .tile .v, .is-off .state, .is-off .kv dd { color: var(--text); }
 @media (prefers-reduced-motion: reduce) { .chip.live::before, .pill.busy .dot { animation: none; } .meter > i { transition: none; } }
+
+.debug {
+  margin: 0.75rem 0 0;
+  max-height: 24rem;
+  overflow: auto;
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--head);
+}

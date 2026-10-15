@@ -55,6 +55,7 @@ ROOT = "/org/carpi"
 DEFAULT_MTU = 23
 MGMT_INSTANCE = 1                 # advertising slot used when going through the kernel
 SAMPLE_EVERY_S = 2                # Pi health + can0 readings for the dashboard
+NOTIFY_GAP_MS = 15                # pause between reply notifications (see TxCharacteristic)
 
 
 def log(msg):
@@ -160,11 +161,20 @@ class Characteristic(dbus.service.Object):
 
 
 class TxCharacteristic(Characteristic):
-    """Pi -> phone: reply lines as notifications, split to the link's MTU."""
+    """Pi -> phone: reply lines as notifications.
+
+    Replies go out through one queue, NOTIFY_GAP_MS apart, in pieces of at most
+    carpi_control.NOTIFY_MAX bytes. Sending a 4 KB reply as one burst of MTU-sized (514-byte)
+    notifications reached the Pi's log as sent but never arrived whole on the phone, and
+    notifications are fire-and-forget, so nothing reported the loss. Small paced pieces each fit
+    one radio packet and leave the phone's Bluetooth stack time to deliver them. The single queue
+    also keeps two replies from interleaving."""
 
     def __init__(self, bus, index, service):
         super().__init__(bus, index, carpi_control.TX_UUID, ["encrypt-notify"], service)
         self.notifying = False
+        self.queue = []                   # pieces still to notify, oldest first
+        self.pumping = False
 
     @dbus.service.method(GATT_CHRC)
     def StartNotify(self):
@@ -176,14 +186,35 @@ class TxCharacteristic(Characteristic):
     def StopNotify(self):
         log("phone unsubscribed from replies")
         self.notifying = False
+        if self.queue:
+            log(f"  {len(self.queue)} unsent reply pieces dropped")
+            self.queue.clear()
 
-    def send(self, data, mtu):
+    def send(self, data, mtu, label=None):
         if not self.notifying:
             log("reply dropped: no phone is subscribed to replies")
             return False
-        for chunk in carpi_control.chunks(data, max(20, mtu - 3)):
-            self.PropertiesChanged(GATT_CHRC, {"Value": dbus.Array(chunk, signature="y")}, [])
+        pieces = carpi_control.chunks(data, carpi_control.notify_size(mtu))
+        self.queue.extend(pieces)
+        if label:
+            log(f"  {label}: {len(data)} bytes in {len(pieces)} notifications")
+        if not self.pumping:
+            self.pumping = True
+            self._pump()
         return False                      # GLib.idle_add: run once
+
+    def _pump(self):
+        """Notify one piece; reschedule while more are queued (a GLib timeout callback)."""
+        if not self.notifying or not self.queue:
+            self.pumping = False
+            return False
+        piece = self.queue.pop(0)
+        self.PropertiesChanged(GATT_CHRC, {"Value": dbus.Array(piece, signature="y")}, [])
+        if self.queue:
+            GLib.timeout_add(NOTIFY_GAP_MS, self._pump)
+        else:
+            self.pumping = False
+        return False
 
 
 class RxCharacteristic(Characteristic):
@@ -203,9 +234,10 @@ class RxCharacteristic(Characteristic):
         for line in buf.feed(bytes(value)):
             reply = self.controller.handle_line(line)
             cmd = _cmd(line)
-            if cmd != "status":                       # polled every 3 s: too chatty to log
-                log(f"{cmd} from {device.rsplit('/', 1)[-1]}: {len(reply)} byte reply, mtu {mtu}")
-            GLib.idle_add(self.tx.send, reply, mtu)   # after WriteValue has returned
+            label = None
+            if cmd != "status":                       # polled every 2 s: too chatty to log
+                label = f"{cmd} from {device.rsplit('/', 1)[-1]} (mtu {mtu})"
+            GLib.idle_add(self.tx.send, reply, mtu, label)   # after WriteValue has returned
 
 
 def _cmd(line):

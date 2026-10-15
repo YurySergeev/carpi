@@ -9,8 +9,8 @@
   <meta name="robots" content="noindex">
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="manifest" href="manifest.webmanifest">
-  <link rel="stylesheet" href="config.css">
-  <script src="config.js" defer></script>
+  <link rel="stylesheet" href="config.css?v=3">
+  <script src="config.js?v=3" defer></script>
 </head>
 <body>
   <div class="page">
@@ -56,6 +56,11 @@
         <div class="card-head"><h2>Raspberry Pi</h2><span class="chip" id="pi-chip">—</span></div>
         <div class="tiles" id="pi-tiles"></div>
         <p class="power" id="pi-power"></p>
+      </section>
+
+      <section class="card" id="debug-card" hidden>
+        <div class="card-head"><h2>Debug log</h2><button class="btn small" id="debug-copy" type="button">Copy</button></div>
+        <pre class="debug" id="debug-log">Connect to start logging Bluetooth traffic.</pre>
       </section>
     </main>
 

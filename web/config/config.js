@@ -3,6 +3,7 @@
 // Protocol: newline-terminated JSON lines both ways; see carpi_control.py in the repo.
 // ?demo (or the "Try the demo" button) swaps the Bluetooth link for a simulated CarPi.
 // ?demo=unplugged simulates a Pi that's powered but not on the OBD port.
+// ?debug shows a log of every request sent and every Bluetooth notification received.
 "use strict";
 
 const SERVICE = "6c2a0001-4f3b-4d1e-9a57-3c8e2b7d5f10";
@@ -24,6 +25,18 @@ const STATES = {
   offline: "Logger isn't running",
   unknown: "Logger status unknown",
 };
+
+const DEBUG = new URLSearchParams(location.search).has("debug");
+const debugLines = [];
+function dbg(text) {
+  if (!DEBUG) return;
+  const t = new Date();
+  const stamp = `${t.toTimeString().slice(0, 8)}.${String(t.getMilliseconds()).padStart(3, "0")}`;
+  debugLines.push(`${stamp} ${text}`);
+  if (debugLines.length > 200) debugLines.shift();
+  const pre = document.querySelector("#debug-log");
+  if (pre) { pre.textContent = debugLines.join("\n"); pre.scrollTop = pre.scrollHeight; }
+}
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();
@@ -58,6 +71,7 @@ class BleLink {
       this.device.addEventListener("gattserverdisconnected", () => this.closed());
     }
     await this.device.gatt.connect();
+    dbg(`GATT connected to ${this.name}`);
     await this.subscribe();                 // first encrypted access: Android shows the pairing prompt
     await this.write(enc.encode("\n"));     // flush a half line the Pi may hold from a dropped link
   }
@@ -76,7 +90,9 @@ class BleLink {
     this.tx = tx;
     tx.addEventListener("characteristicvaluechanged", this.onData);
     await tx.startNotifications();
+    if (this.buf.length) dbg(`dropped ${this.buf.length} B of a half-received reply`);
     this.buf = new Uint8Array(0);           // a half-received reply is useless now
+    dbg("subscribed to replies (TX notifications on)");
   }
 
   disconnect() { if (this.connected) this.device.gatt.disconnect(); }
@@ -93,14 +109,19 @@ class BleLink {
     merged.set(this.buf);
     merged.set(chunk, this.buf.length);
     this.buf = merged;
+    dbg(`← notification ${chunk.length} B (${this.buf.length} B waiting for a newline)`);
     let i;
     while ((i = this.buf.indexOf(10)) >= 0) {
       const line = dec.decode(this.buf.slice(0, i));
       this.buf = this.buf.slice(i + 1);
       let msg;
-      try { msg = JSON.parse(line); } catch { continue; }
+      try { msg = JSON.parse(line); } catch {
+        dbg(`✗ ${line.length}-char line isn't valid JSON: ${line.slice(0, 50)} … ${line.slice(-30)}`);
+        continue;
+      }
       const p = this.pending.get(msg.rid);
-      if (!p) continue;
+      if (!p) { dbg(`reply for rid ${msg.rid}, which isn't pending (already answered or timed out)`); continue; }
+      dbg(`✓ reply to rid ${msg.rid}: ${line.length} chars, ok=${msg.ok}`);
       this.pending.delete(msg.rid);
       if (msg.ok) p.resolve(msg); else p.reject(new Error(msg.error || "CarPi refused"));
     }
@@ -114,6 +135,7 @@ class BleLink {
   request(cmd, args = {}) {
     const rid = ++this.rid;
     const line = enc.encode(JSON.stringify({ rid, cmd, ...args }) + "\n");
+    dbg(`→ ${cmd} rid ${rid} (${line.length} B)`);
     return new Promise((resolve, reject) => {
       let timer;
       const arm = (ms, fn) => { clearTimeout(timer); timer = setTimeout(fn, ms); };
@@ -132,9 +154,11 @@ class BleLink {
       // both copies carry the same rid, so whichever reply arrives first wins.
       arm(RETRY_AFTER_MS, async () => {
         if (!this.pending.has(rid)) return;
+        dbg(`… no reply to rid ${rid} after ${RETRY_AFTER_MS / 1000} s: resubscribing and resending`);
         try { await this.subscribe(); } catch { /* the resend may still get through */ }
         if (!this.pending.has(rid)) return;
         arm(REPLY_TIMEOUT_MS, () => {
+          dbg(`✗ rid ${rid} gave up (${this.buf.length} B left without a newline)`);
           this.pending.delete(rid);
           reject(new Error("No reply from CarPi"));
         });
@@ -380,6 +404,7 @@ async function connect(demo = false) {
     app.link.onclose = () => { stopPolling(); renderConn(); };
   }
   app.rtt = null;
+  app.lastReply = 0;                     // nothing from this link yet
   $("#demo-note").hidden = !(app.link instanceof DemoLink);
   setPill("busy", "Connecting…");
   try {
@@ -388,11 +413,14 @@ async function connect(demo = false) {
     const hello = await app.link.request("hello");
     app.rtt = performance.now() - t0;
     applyState(hello);
-    startPolling();
   } catch (e) {
     if (e.name !== "NotFoundError") toast(friendly(e), true);   // NotFoundError = chooser cancelled
   }
+  // Still linked even if that first request got no reply (it happens on the first connection
+  // after pairing): keep polling, and the poller retries "hello" until one gets through.
+  if (app.link.connected) startPolling();
   renderConn();
+  renderDash();
 }
 
 function friendly(e) {
@@ -410,7 +438,7 @@ function startPolling() {
     inFlight = true;                     // a slow reply must not stack up requests behind it
     const t0 = performance.now();
     try {
-      const msg = await app.link.request("status");
+      const msg = await app.link.request(app.catalog.length ? "status" : "hello");
       app.rtt = performance.now() - t0;
       applyState(msg);
     } catch { /* next tick */ } finally { inFlight = false; }
@@ -708,6 +736,7 @@ function renderLink() {
   const since = app.lastReply ? (performance.now() - app.lastReply) / 1000 : null;
   const stale = since === null || since * 1000 > STALE_MS;
   chip($("#link-chip"), stale ? "warn" : "ok", stale ? "No reply" : "Live", !stale);
+  setPill(stale ? "busy" : "on", stale ? "No reply" : app.link.name);
   $("#link-line").textContent = stale ? "Connected, not responding" : `Connected to ${app.link.name}`;
   const parts = [`last reply ${ago(since)}`];
   if (num(app.rtt)) parts.push(`round trip ${Math.round(app.rtt)} ms`);
@@ -743,7 +772,7 @@ function carSummary() {
 function renderCar() {
   const on = connected();
   $("#car-card").classList.toggle("is-off", !on);
-  if (!on || (!app.obd && !app.status)) {
+  if (!on || !app.lastReply) {
     chip($("#car-chip"), "", "—");
     $("#car-line").textContent = "—";
     $("#car-sub").textContent = on ? "Waiting for the first reading." : "Connect to see the OBD-II link and the logger.";
@@ -827,6 +856,14 @@ $(".tabs").addEventListener("click", (e) => {
 });
 setInterval(() => { if (!document.hidden) renderLink(); }, 1000);   // "last reply 3 s ago"
 showTab(app.tab);
+if (DEBUG) {
+  $("#debug-card").hidden = false;
+  $("#debug-copy").addEventListener("click", async () => {
+    try { await navigator.clipboard.writeText(debugLines.join("\n")); toast("Debug log copied"); }
+    catch { toast("Couldn't copy: select the text instead", true); }
+  });
+  dbg(`page loaded: ${navigator.userAgent}`);
+}
 if (!("bluetooth" in navigator)) $("#no-bt").hidden = false;
 if (new URLSearchParams(location.search).has("demo")) { $("#no-bt").hidden = true; connect(true); }
 document.addEventListener("visibilitychange", () => {
