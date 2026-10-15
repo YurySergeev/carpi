@@ -69,3 +69,29 @@ def test_status_fresh_and_stale(tmp_path):
     assert _ask(ctl, rid=1, cmd="status")["status"] == {"state": "logging", "rows": 10}
     path.write_text(json.dumps({"state": "logging", "updated": time.time() - 60}))
     assert _ask(ctl, rid=2, cmd="status")["status"] == {"state": "offline"}
+
+
+def test_status_carries_system_and_obd(tmp_path):
+    snap = {"system": {"cpu_temp_c": 48.2, "cpu_pct": 12.0}, "obd": {"verdict": "traffic", "rx_per_s": 2.0}}
+    ctl = cc.Controller(cp.Store(tmp_path), tmp_path / "status.json", system=lambda: snap)
+    r = _ask(ctl, rid=1, cmd="status")
+    assert r["system"]["cpu_temp_c"] == 48.2 and r["obd"]["verdict"] == "traffic"
+    assert r["status"] == {"state": "unknown"}
+    h = _ask(ctl, rid=2, cmd="hello")
+    assert h["obd"]["verdict"] == "traffic" and h["presets"]
+
+
+def test_broken_sampler_still_replies(tmp_path):
+    def boom():
+        raise RuntimeError("no /proc")
+    ctl = cc.Controller(cp.Store(tmp_path), tmp_path / "status.json", system=boom)
+    r = _ask(ctl, rid=1, cmd="status")
+    assert r["ok"] and "no /proc" in r["system"]["error"]
+
+
+def test_status_reply_with_real_sampler_is_small(tmp_path):
+    import carpi_system
+    s = carpi_system.Sampler(root=tmp_path, disk=tmp_path, run=lambda cmd: None)
+    ctl = cc.Controller(cp.Store(tmp_path), tmp_path / "status.json", system=s.snapshot)
+    out = ctl.handle_line(json.dumps({"rid": 1, "cmd": "status"}))
+    assert len(out) < 1500          # a handful of notifications at a typical phone MTU

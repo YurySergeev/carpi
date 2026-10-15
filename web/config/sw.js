@@ -1,5 +1,5 @@
 // Offline copy of the config page: network first (so updates arrive), cache when there's no signal.
-const CACHE = "carpi-config-v1";
+const CACHE = "carpi-config-v2";
 const FILES = ["./", "index.html", "config.css", "config.js", "manifest.webmanifest", "icon.svg"];
 
 self.addEventListener("install", (e) => {

@@ -185,3 +185,71 @@ dialog p { margin: 0 0 1rem; color: var(--head); }
   z-index: 10;
 }
 .toast.error { border-color: var(--warn); }
+
+/* ---------- tabs ---------- */
+.tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.25rem;
+  padding: 0.25rem;
+  margin: 0 0 1.25rem;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+.tab {
+  font: inherit;
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: var(--text);
+  background: transparent;
+  border: 0;
+  border-radius: 9px;
+  min-height: 2.5rem;
+  cursor: pointer;
+}
+.tab[aria-selected="true"] { background: var(--card-hi); color: var(--head); box-shadow: inset 0 0 0 1px var(--line); }
+
+/* ---------- dashboard ---------- */
+.card-head { display: flex; justify-content: space-between; align-items: center; gap: 0.75rem; }
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  white-space: nowrap;
+}
+.chip::before { content: ""; width: 0.45rem; height: 0.45rem; border-radius: 50%; background: var(--line); }
+.chip.ok { color: var(--pass); border-color: color-mix(in srgb, var(--pass) 45%, transparent); }
+.chip.ok::before { background: var(--pass); }
+.chip.warn { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+.chip.warn::before { background: var(--accent); }
+.chip.crit { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 55%, transparent); }
+.chip.crit::before { background: var(--warn); }
+.chip.live::before { animation: pulse 1.6s ease-in-out infinite; }
+
+.kv { display: grid; grid-template-columns: max-content 1fr; gap: 0.35rem 1rem; margin: 0.9rem 0 0; font-size: 0.9rem; }
+.kv dt { color: var(--text); }
+.kv dd { margin: 0; color: var(--head); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+
+.tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.6rem; margin-top: 0.85rem; }
+.tile { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 0.7rem 0.8rem 0.75rem; min-width: 0; }
+.tile .k { font-size: 0.78rem; }
+.tile .v { color: var(--head); font-size: 1.45rem; font-weight: 650; line-height: 1.2; font-variant-numeric: tabular-nums; }
+.tile .v small { font-size: 0.8rem; font-weight: 500; color: var(--text); margin-left: 0.15rem; }
+.tile .s { font-size: 0.75rem; min-height: 1.1em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.meter { height: 0.3rem; border-radius: 999px; background: var(--line); margin: 0.45rem 0 0.3rem; overflow: hidden; }
+.meter > i { display: block; height: 100%; width: 0; border-radius: inherit; background: var(--pass); transition: width 0.4s ease; }
+.tile.warn .meter > i { background: var(--accent); }
+.tile.crit .meter > i { background: var(--warn); }
+.tile.crit .v { color: var(--warn); }
+.power { margin: 0.8rem 0 0; font-size: 0.88rem; }
+.power.warn { color: var(--accent); }
+.power.crit { color: var(--warn); font-weight: 600; }
+.is-off .tile .v, .is-off .state, .is-off .kv dd { color: var(--text); }
+@media (prefers-reduced-motion: reduce) { .chip.live::before, .pill.busy .dot { animation: none; } .meter > i { transition: none; } }

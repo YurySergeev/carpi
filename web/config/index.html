@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>CarPi config</title>
-  <meta name="description" content="Pick what CarPi logs on the next drive, over Bluetooth.">
+  <title>CarPi</title>
+  <meta name="description" content="CarPi over Bluetooth: live status of the Pi and the OBD link, and what it logs.">
   <meta name="theme-color" content="#0e0f11">
   <meta name="robots" content="noindex">
   <link rel="icon" href="icon.svg" type="image/svg+xml">
@@ -17,7 +17,7 @@
     <header class="top">
       <div>
         <p class="eyebrow">CarPi</p>
-        <h1>Drive config</h1>
+        <h1 id="page-title">Dashboard</h1>
       </div>
       <div class="conn">
         <span class="pill" id="conn-pill"><span class="dot" aria-hidden="true"></span><span id="conn-text">Not connected</span></span>
@@ -31,9 +31,37 @@
     </p>
     <p class="notice demo" id="demo-note" hidden>Demo: a simulated CarPi. Nothing here reaches the car.</p>
 
-    <main id="home">
+    <nav class="tabs" role="tablist" aria-label="Sections">
+      <button class="tab" type="button" role="tab" id="tab-dash" aria-controls="dash" aria-selected="true">Dashboard</button>
+      <button class="tab" type="button" role="tab" id="tab-home" aria-controls="home" aria-selected="false">Logging</button>
+    </nav>
+
+    <main id="dash" role="tabpanel" aria-labelledby="tab-dash">
+      <p class="notice" id="dash-hint">Connect to CarPi to see live readings. The page polls the Pi every 2 seconds while it's open.</p>
+
+      <section class="card" id="link-card" aria-live="polite">
+        <div class="card-head"><h2>Bluetooth</h2><span class="chip" id="link-chip">Offline</span></div>
+        <p class="state" id="link-line">Not connected</p>
+        <p class="sub" id="link-sub"></p>
+      </section>
+
+      <section class="card" id="car-card" aria-live="polite">
+        <div class="card-head"><h2>Car and OBD-II</h2><span class="chip" id="car-chip">—</span></div>
+        <p class="state" id="car-line">—</p>
+        <p class="sub" id="car-sub"></p>
+        <dl class="kv" id="car-kv"></dl>
+      </section>
+
+      <section class="card" id="pi-card">
+        <div class="card-head"><h2>Raspberry Pi</h2><span class="chip" id="pi-chip">—</span></div>
+        <div class="tiles" id="pi-tiles"></div>
+        <p class="power" id="pi-power"></p>
+      </section>
+    </main>
+
+    <main id="home" role="tabpanel" aria-labelledby="tab-home" hidden>
       <section class="card" id="now" aria-live="polite">
-        <h2>Now</h2>
+        <h2>Logger</h2>
         <p class="state" id="state-line">Connect to see what CarPi is doing.</p>
         <p class="sub" id="state-sub"></p>
         <form class="tag" id="tag-form">

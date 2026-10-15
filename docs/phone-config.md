@@ -1,4 +1,33 @@
-# Choosing what to log from the phone
+# The phone page: dashboard and logging setup
+
+After the phone connects, the page opens on a **Dashboard** tab. A second **Logging** tab holds the tag and the presets described below. The page remembers which tab you used last.
+
+## Dashboard
+
+The page asks the Pi for `status` every 2 seconds while it's open and in front. Three cards:
+
+| Card | What it shows | Where it comes from |
+| --- | --- | --- |
+| **Bluetooth** | Live, not responding (no reply for 8 s), or disconnected; time since the last reply; round-trip time of the last request | The page itself |
+| **Car and OBD-II** | Whether the Pi is plugged in and the car is awake, what the logger is doing, CAN controller state, frames per second, the current drive (length, rows, file), preset and tag | `carpi_system.py` (can0) + the logger's `/run/carpi/status.json` |
+| **Raspberry Pi** | CPU temperature, CPU load, clock speed, memory, SD card space, uptime, and under-voltage / throttling flags | `carpi_system.py` (`/proc`, `/sys`) |
+
+**How "plugged in" is decided.** The Pi only has power while the ignition is on, and with the ignition on the car's gateway sends a keep-alive frame on CAN about twice a second, even when the engine is off. `carpi_system.py` watches the kernel's receive counter for can0 (`/sys/class/net/can0/statistics/rx_packets`). Frames in the last 5 seconds means the OBD-II cable is in and the car is awake. No frames means the cable is out, or the car is asleep (only possible on bench power). It never opens a CAN socket, so it can't send anything to the car and works even while the logger is stopped.
+
+| `obd.verdict` | Card says |
+| --- | --- |
+| `traffic` | Plugged in, plus the logger's state (engine running and logging, car awake with the engine off, …) |
+| `quiet` | No CAN traffic: unplugged, or the car is asleep |
+| `checking` | First reading after the service starts (frames per second needs two) |
+| `down` | can0 exists but isn't up (`sudo systemctl restart can0`) |
+| `bus_off` | The CAN controller gave up after too many errors: wiring or bitrate |
+| `no_interface` | There's no can0: the HAT or the `mcp2515` overlay |
+
+**Power flags.** "Under-voltage now" means the car's USB port isn't holding 5 V right now; "since boot" means it dipped at some point. They come from the firmware (`/sys/devices/platform/soc/soc:firmware/get_throttled`, the same value as `vcgencmd get_throttled`).
+
+Try it without the car at `https://yurysergeev.github.io/carpi/config/?demo`, or `?demo=unplugged` for a Pi that's powered but not on the OBD port.
+
+## Choosing what to log
 
 CarPi can log a different set of values on each drive. You pick a **preset** on your phone over Bluetooth, and the logger uses it from that moment on.
 
@@ -90,4 +119,4 @@ The protocol has one GATT service with two characteristics. The UUIDs are in `ca
 - **RX** (the phone writes): requests as JSON lines ending in `\n`, in chunks of any size.
 - **TX** (the Pi notifies): one JSON line per reply, split to fit the link's MTU.
 
-Commands are `hello`, `state`, `status`, `save`, `delete`, `activate` and `tag`. They're documented at the top of `carpi_control.py`, and `tests/test_control.py` exercises them. Both characteristics require an encrypted (paired) link.
+Commands are `hello`, `state`, `status`, `save`, `delete`, `activate` and `tag`. `status` (and `state`, which includes it) returns three objects: `status` from the logger, `system` and `obd` from `carpi_system.py`, which `carpi_ble.py` samples every 2 seconds. They're documented at the top of `carpi_control.py`, and `tests/test_control.py` exercises them. Both characteristics require an encrypted (paired) link.

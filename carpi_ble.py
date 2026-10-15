@@ -3,9 +3,10 @@
 carpi_ble.py - Bluetooth LE service that lets the phone pick what the logger records.
 
 Runs next to carpi-logger as its own systemd service. It never touches the CAN bus: all it does
-is read and write small files in ~/carpi (presets, active_preset.json, tag.txt) and read the
-logger's /run/carpi/status.json. The protocol is in carpi_control.py; the phone page is
-web/config/.
+is read and write small files in ~/carpi (presets, active_preset.json, tag.txt), read the
+logger's /run/carpi/status.json, and read the Pi's own health and can0 counters for the
+dashboard (carpi_system.py, sampled every SAMPLE_EVERY_S). The protocol is in carpi_control.py;
+the phone page is web/config/.
 
 BlueZ over D-Bus, standard Raspberry Pi OS packages only:
   sudo apt install -y python3-dbus python3-gi
@@ -36,6 +37,7 @@ from gi.repository import GLib
 import carpi_control
 import carpi_mgmt
 import carpi_presets
+import carpi_system
 
 BLUEZ = "org.bluez"
 OBJECT_MANAGER = "org.freedesktop.DBus.ObjectManager"
@@ -52,6 +54,7 @@ AGENT = "org.bluez.Agent1"
 ROOT = "/org/carpi"
 DEFAULT_MTU = 23
 MGMT_INSTANCE = 1                 # advertising slot used when going through the kernel
+SAMPLE_EVERY_S = 2                # Pi health + can0 readings for the dashboard
 
 
 def log(msg):
@@ -366,6 +369,7 @@ def main():
     ap.add_argument("--home", default="~/carpi", help="folder with presets/ and tag.txt")
     ap.add_argument("--status-file", default="/run/carpi/status.json")
     ap.add_argument("--name", default="CarPi", help="advertised Bluetooth name")
+    ap.add_argument("--can", default="can0", help="CAN interface the dashboard reports on")
     ap.add_argument("--pair", type=int, nargs="?", const=120, metavar="SECONDS",
                     help="open a pairing window (default 120 s) and exit")
     args = ap.parse_args()
@@ -390,7 +394,10 @@ def main():
              dbus.String(args.name), fatal=False, hint=None)
 
     store = carpi_presets.Store(args.home)
-    controller = carpi_control.Controller(store, args.status_file)
+    sampler = carpi_system.Sampler(can=args.can, disk=args.home)
+    sampler.sample()                       # first reading now; CPU % and frames/s need a second
+    GLib.timeout_add_seconds(SAMPLE_EVERY_S, sampler.sample)
+    controller = carpi_control.Controller(store, args.status_file, system=sampler.snapshot)
     app = Application(bus)
     service = Service(bus, 0, carpi_control.SERVICE_UUID)
     tx = TxCharacteristic(bus, 1, service)

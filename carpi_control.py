@@ -10,8 +10,15 @@ the bytes.
 Requests:  {"rid": 7, "cmd": "<name>", ...}       Replies: {"rid": 7, "ok": true, ...}
                                                             {"rid": 7, "ok": false, "error": "..."}
   hello                    catalog of values + everything in "state" (below)
-  state                    presets, active preset id, tag, supported PIDs, logger status
-  status                   logger status only (polled every few seconds)
+  state                    presets, active preset id, tag, supported PIDs, logger status,
+                           Pi system readings and the OBD/CAN link (see "status")
+  status                   for the dashboard, polled every couple of seconds:
+                             status  the logger's /run/carpi/status.json ("offline" if stale)
+                             system  Pi CPU temp, load, clock, memory, SD space, uptime,
+                                     under-voltage / throttling (carpi_system.py)
+                             obd     can0 state, frames/s, seconds since the last frame and a
+                                     verdict: checking | traffic | quiet | down | bus_off |
+                                     no_interface
   save     preset, activate (bool)   create or overwrite a saved preset
   delete   id
   activate id              the logger picks it up within a second (mid-drive: new file)
@@ -62,9 +69,12 @@ def catalog():
 
 
 class Controller:
-    def __init__(self, store, status_path):
+    def __init__(self, store, status_path, system=None):
+        """system: a callable returning {"system": {...}, "obd": {...}} (carpi_system.Sampler
+        .snapshot), or None where there's no Pi to read (tests)."""
         self.store = store
         self.status_path = Path(status_path) if status_path else None
+        self.system = system
 
     def status(self):
         data = presets.read_json(self.status_path) if self.status_path else None
@@ -75,10 +85,19 @@ class Controller:
         data.pop("updated", None)
         return data
 
+    def live(self):
+        """Logger status plus the Pi's own readings: everything the dashboard shows."""
+        out = {"status": self.status()}
+        if self.system is not None:
+            try:
+                out.update(self.system())
+            except Exception as e:             # readings are best effort; the reply still goes out
+                out["system"] = {"error": f"{type(e).__name__}: {e}"}
+        return out
+
     def state(self):
-        return {"presets": self.store.presets(), "active": self.store.active_id(),
-                "tag": self.store.tag(), "supported": self.store.supported(),
-                "status": self.status()}
+        return dict(self.live(), presets=self.store.presets(), active=self.store.active_id(),
+                    tag=self.store.tag(), supported=self.store.supported())
 
     def handle(self, msg):
         if not isinstance(msg, dict):
@@ -90,7 +109,7 @@ class Controller:
         if cmd == "state":
             return self.state()
         if cmd == "status":
-            return {"status": self.status()}
+            return self.live()
         if cmd == "save":
             saved = self.store.save(msg.get("preset"))
             if msg.get("activate"):

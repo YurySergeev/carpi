@@ -1,7 +1,7 @@
 {
-  "name": "CarPi drive config",
+  "name": "CarPi",
   "short_name": "CarPi",
-  "description": "Pick what CarPi logs on the next drive, over Bluetooth.",
+  "description": "CarPi over Bluetooth: live Pi and OBD status, and what it logs.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

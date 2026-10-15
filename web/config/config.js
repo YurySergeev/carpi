@@ -1,6 +1,8 @@
-// CarPi drive config: pick what the logger records, over Bluetooth LE (Web Bluetooth).
+// CarPi over Bluetooth LE (Web Bluetooth): a live dashboard of the link, the car's OBD-II port and
+// the Pi itself, plus picking what the logger records (presets and tag).
 // Protocol: newline-terminated JSON lines both ways; see carpi_control.py in the repo.
 // ?demo (or the "Try the demo" button) swaps the Bluetooth link for a simulated CarPi.
+// ?demo=unplugged simulates a Pi that's powered but not on the OBD port.
 "use strict";
 
 const SERVICE = "6c2a0001-4f3b-4d1e-9a57-3c8e2b7d5f10";
@@ -9,7 +11,8 @@ const TX = "6c2a0003-4f3b-4d1e-9a57-3c8e2b7d5f10";   // CarPi notifies replies
 const CHUNK = 180;              // bytes per write; longer writes are split by the phone's BLE stack
 const RETRY_AFTER_MS = 6000;    // no reply by then: subscribe to replies again and resend once
 const REPLY_TIMEOUT_MS = 10000;
-const STATUS_EVERY_MS = 3000;
+const STATUS_EVERY_MS = 2000;   // carpi_ble.py samples the Pi every 2 s
+const STALE_MS = 8000;          // no reply for this long: the link is "not responding"
 const DEFAULT_REQ_PER_S = 100;  // measured on the A3: ~7.7 rows/s x 13 requests
 const DEFAULT_HZ = 10;          // carpi_logger.py --hz
 const NAME_OK = /^[\w .()&+-]{1,32}$/u;
@@ -173,6 +176,8 @@ class DemoLink {
     this.tag = "post-pcv";
     this.supported = ids.filter((id) => id !== "2F");
     this.started = Date.now() - 95000;
+    this.booted = Date.now() - 412000;
+    this.unplugged = new URLSearchParams(location.search).get("demo") === "unplugged";
     this.connected = false;
     this.name = "CarPi (demo)";
     this.onclose = null;
@@ -184,6 +189,7 @@ class DemoLink {
   find(id) { return this.builtin.concat(this.user).find((p) => p.id === id); }
 
   status() {
+    if (this.unplugged) return { state: "waiting", hz: DEFAULT_HZ, req_per_s: null };
     const preset = this.find(this.active);
     const elapsed = (Date.now() - this.started) / 1000;
     const rate = estimate(preset.weights, DEFAULT_REQ_PER_S, DEFAULT_HZ).rows;
@@ -194,10 +200,32 @@ class DemoLink {
     };
   }
 
+  // Same shape as carpi_system.Sampler.snapshot(), with a bit of wobble so the page looks alive.
+  live() {
+    const j = (x, d) => +(x + (Math.random() - 0.5) * 2 * d).toFixed(1);
+    const busy = !this.unplugged;
+    const mhz = busy ? (Math.random() < 0.7 ? 1800 : 1500) : (Math.random() < 0.8 ? 600 : 1800);
+    return {
+      status: this.status(),
+      system: {
+        cpu_temp_c: j(busy ? 54 : 47, 1.2), cpu_pct: j(busy ? 17 : 3, busy ? 5 : 1.5), cpu_mhz: mhz,
+        cpu_max_mhz: 1800, cores: 4, load_1m: j(busy ? 0.62 : 0.08, 0.05), mem_pct: j(busy ? 23 : 18, 0.4),
+        mem_total_mb: 1849, disk_free_gb: 22.71, disk_pct: 21.4,
+        uptime_s: Math.round((Date.now() - this.booted) / 1000),
+        throttle: { now: [], since_boot: busy ? [] : ["under-voltage"] }, age_s: j(0.9, 0.8),
+      },
+      obd: busy
+        ? { iface: "can0", present: true, up: true, controller: "ERROR-ACTIVE", bitrate: 500000, tx_errors: 0,
+            rx_errors: 0, rx_per_s: j(101, 3), last_frame_s: 0, verdict: "traffic" }
+        : { iface: "can0", present: true, up: true, controller: "ERROR-ACTIVE", bitrate: 500000, tx_errors: 0,
+            rx_errors: 0, rx_per_s: 0, last_frame_s: null, verdict: "quiet" },
+    };
+  }
+
   state() {
     const presets = this.builtin.map((p) => ({ ...p, builtin: true }))
       .concat([...this.user].sort((a, b) => a.name.localeCompare(b.name)).map((p) => ({ ...p, builtin: false })));
-    return { presets, active: this.active, tag: this.tag, supported: this.supported, status: this.status() };
+    return { ...this.live(), presets, active: this.active, tag: this.tag, supported: this.supported };
   }
 
   async request(cmd, args = {}) {
@@ -206,7 +234,7 @@ class DemoLink {
     switch (cmd) {
       case "hello": return { ok: true, protocol: 1, catalog: this.catalog, max_weight: 20, ...this.state() };
       case "state": return { ok: true, ...this.state() };
-      case "status": return { ok: true, status: this.status() };
+      case "status": return { ok: true, ...this.live() };
       case "save": {
         const p = args.preset;
         if (!NAME_OK.test((p.name || "").trim())) fail("name: 1-32 letters, digits, spaces or . ( ) & + - _");
@@ -276,6 +304,7 @@ function fmtDuration(s) {
 const app = {
   link: null, catalog: [], maxWeight: 20, presets: [], active: null, tag: "", supported: null,
   status: { state: "unknown" }, open: null, editing: null, dirty: false, timer: null,
+  system: null, obd: null, lastReply: 0, rtt: null, tab: store("carpi.tab") === "home" ? "home" : "dash",
 };
 
 function speed() {
@@ -292,13 +321,16 @@ function applyState(msg) {
   if ("active" in msg) app.active = msg.active;
   if ("tag" in msg) app.tag = msg.tag;
   if ("supported" in msg) app.supported = msg.supported;
+  app.lastReply = performance.now();
+  if ("system" in msg) app.system = msg.system;
+  if ("obd" in msg) app.obd = msg.obd;
   if (msg.status) {
     app.status = msg.status;
     if (msg.status.req_per_s) store("carpi.req_per_s", msg.status.req_per_s);
     if (msg.status.hz) store("carpi.hz", msg.status.hz);
   }
   // A status poll redraws only the status card: rebuilding the list mid-tap would eat the tap.
-  if (msg.presets) render(); else { renderConn(false); renderStatus(); }
+  if (msg.presets) render(); else { renderConn(false); renderStatus(); renderDash(); }
 }
 
 function toast(text, error = false) {
@@ -347,11 +379,14 @@ async function connect(demo = false) {
     app.link = demo ? new DemoLink() : new BleLink();
     app.link.onclose = () => { stopPolling(); renderConn(); };
   }
+  app.rtt = null;
   $("#demo-note").hidden = !(app.link instanceof DemoLink);
   setPill("busy", "Connecting…");
   try {
     await app.link.connect();
+    const t0 = performance.now();
     const hello = await app.link.request("hello");
+    app.rtt = performance.now() - t0;
     applyState(hello);
     startPolling();
   } catch (e) {
@@ -369,9 +404,16 @@ function friendly(e) {
 
 function startPolling() {
   stopPolling();
+  let inFlight = false;
   app.timer = setInterval(async () => {
-    if (document.hidden || !app.link.connected || app.editing) return;
-    try { applyState(await app.link.request("status")); } catch { /* next tick */ }
+    if (document.hidden || !app.link.connected || app.editing || inFlight) return;
+    inFlight = true;                     // a slow reply must not stack up requests behind it
+    const t0 = performance.now();
+    try {
+      const msg = await app.link.request("status");
+      app.rtt = performance.now() - t0;
+      applyState(msg);
+    } catch { /* next tick */ } finally { inFlight = false; }
   }, STATUS_EVERY_MS);
 }
 
@@ -390,6 +432,7 @@ function render() {
   renderConn();
   renderStatus();
   renderPresets();
+  renderDash();
 }
 
 function renderConn(withList = true) {
@@ -399,6 +442,7 @@ function renderConn(withList = true) {
   $("#connect").classList.toggle("primary", !on);
   for (const el of ["#tag-input", "#tag-save", "#new-preset"]) $(el).disabled = !on;
   if (!on && withList) renderPresets();
+  if (!on) renderDash();
 }
 
 function presetName(id) {
@@ -511,6 +555,7 @@ function openEditor(preset, copy) {
   $("#preset-name").value = name;
   buildValues();
   $("#home").hidden = true;
+  $(".tabs").hidden = true;
   $("#editor").hidden = false;
   window.scrollTo(0, 0);
 }
@@ -519,6 +564,7 @@ async function closeEditor(force = false) {
   if (!force && app.dirty && !await confirmBox("Discard your changes to this preset?", "Discard")) return;
   app.editing = null;
   $("#editor").hidden = true;
+  $(".tabs").hidden = false;
   $("#home").hidden = false;
   render();
 }
@@ -611,8 +657,176 @@ async function save(activate) {
 $("#save").addEventListener("click", () => save(false));
 $("#save-apply").addEventListener("click", () => save(true));
 
+// ---------- dashboard ----------
+
+function showTab(tab) {
+  app.tab = tab;
+  store("carpi.tab", tab);
+  $("#dash").hidden = tab !== "dash";
+  $("#home").hidden = tab !== "home";
+  $("#tab-dash").setAttribute("aria-selected", String(tab === "dash"));
+  $("#tab-home").setAttribute("aria-selected", String(tab === "home"));
+  $("#page-title").textContent = tab === "dash" ? "Dashboard" : "Logging";
+  if (tab === "dash") renderDash();
+}
+
+function chip(el, kind, text, live = false) {
+  el.className = `chip${kind ? " " + kind : ""}${live ? " live" : ""}`;
+  el.textContent = text;
+}
+
+const num = (v) => typeof v === "number" && Number.isFinite(v);
+const fix = (v, d = 0) => (num(v) ? v.toFixed(d) : "—");
+
+function ago(s) {
+  if (!num(s)) return "never";
+  if (s < 1.5) return "just now";
+  if (s < 90) return `${Math.round(s)} s ago`;
+  if (s < 5400) return `${Math.round(s / 60)} min ago`;
+  return `${(s / 3600).toFixed(1)} h ago`;
+}
+
+function fmtUptime(s) {
+  if (!num(s)) return "—";
+  const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
+  return d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : `${m}m`;
+}
+
+function connected() { return !!(app.link && app.link.connected); }
+
+function renderLink() {
+  const on = connected();
+  const card = $("#link-card");
+  card.classList.toggle("is-off", !on);
+  $("#dash-hint").hidden = on;
+  if (!on) {
+    chip($("#link-chip"), app.link ? "crit" : "", app.link ? "Lost" : "Offline");
+    $("#link-line").textContent = app.link ? "Disconnected" : "Not connected";
+    $("#link-sub").textContent = app.link ? "Tap Reconnect. The Pi may have lost power (ignition off)." : "Tap Connect and pick CarPi.";
+    return;
+  }
+  const since = app.lastReply ? (performance.now() - app.lastReply) / 1000 : null;
+  const stale = since === null || since * 1000 > STALE_MS;
+  chip($("#link-chip"), stale ? "warn" : "ok", stale ? "No reply" : "Live", !stale);
+  $("#link-line").textContent = stale ? "Connected, not responding" : `Connected to ${app.link.name}`;
+  const parts = [`last reply ${ago(since)}`];
+  if (num(app.rtt)) parts.push(`round trip ${Math.round(app.rtt)} ms`);
+  parts.push(`updates every ${STATUS_EVERY_MS / 1000} s`);
+  $("#link-sub").textContent = parts.join(" · ");
+}
+
+// obd.verdict (carpi_system.py) + the logger's state -> [chip kind, chip text, headline, detail]
+function carSummary() {
+  const o = app.obd, s = app.status || {};
+  const engine = {
+    logging: "Engine running, logging",
+    detecting: "Car awake, looking for the engine",
+    ignition_off: "Car awake, engine off",
+    waiting: "Car awake, logger waiting for the engine",
+    offline: "Logger isn't running",
+  }[s.state] || "Logger status unknown";
+  if (!o) {      // a Pi running the older carpi_ble.py: only the logger's view
+    return s.state === "logging" ? ["ok", "Plugged in", "Engine running, logging", "Update carpi_ble.py on the Pi for OBD link details."]
+      : ["", "Unknown", STATES[s.state] || STATES.unknown, "Update carpi_ble.py on the Pi for OBD link details."];
+  }
+  switch (o.verdict) {
+    case "traffic": return ["ok", "Plugged in", engine, "CAN traffic from the car's gateway: the OBD-II cable is connected."];
+    case "quiet": return ["warn", "No traffic", "Not seeing the car", "No CAN frames: the OBD-II cable is unplugged, or the car is asleep."];
+    case "checking": return ["", "Checking", "Checking the OBD-II link…", "Needs two readings, about 2 seconds."];
+    case "down": return ["crit", "can0 down", "CAN interface is down", "can0.service didn't bring it up: sudo systemctl restart can0"];
+    case "bus_off": return ["crit", "Bus-off", "CAN bus error (bus-off)", "The controller gave up after too many errors. Check CAN-H / CAN-L and the 500 kbps bitrate."];
+    case "no_interface": return ["crit", "No CAN HAT", "CAN HAT not found", "can0 doesn't exist: check the HAT and the mcp2515 overlay in config.txt."];
+    default: return ["", "Unknown", "OBD-II link unknown", o.error || ""];
+  }
+}
+
+function renderCar() {
+  const on = connected();
+  $("#car-card").classList.toggle("is-off", !on);
+  if (!on || (!app.obd && !app.status)) {
+    chip($("#car-chip"), "", "—");
+    $("#car-line").textContent = "—";
+    $("#car-sub").textContent = on ? "Waiting for the first reading." : "Connect to see the OBD-II link and the logger.";
+    $("#car-kv").innerHTML = "";
+    return;
+  }
+  const [kind, label, line, sub] = carSummary();
+  const s = app.status || {}, o = app.obd || {};
+  chip($("#car-chip"), kind, label, kind === "ok");
+  $("#car-line").textContent = line;
+  $("#car-sub").textContent = sub;
+  const rows = [];
+  if (app.obd) {
+    rows.push(["CAN", [o.iface, o.controller ? o.controller.toLowerCase() : null, num(o.bitrate) ? `${o.bitrate / 1000} kbps` : null].filter(Boolean).join(" · ") || "—"]);
+    const last = num(o.last_frame_s) ? `last ${ago(o.last_frame_s)}` : "none since the Pi started";
+    rows.push(["Frames", num(o.rx_per_s) && o.rx_per_s > 0 ? `${o.rx_per_s.toFixed(o.rx_per_s < 10 ? 1 : 0)}/s · ${last}` : last]);
+    if ((o.tx_errors || 0) + (o.rx_errors || 0) > 0) rows.push(["Errors", `tx ${o.tx_errors} · rx ${o.rx_errors}`]);
+  }
+  if (s.state === "logging") {
+    rows.push(["Drive", `${fmtDuration(s.elapsed_s || 0)} · ${(s.rows || 0).toLocaleString()} rows${num(s.rows_per_s) ? ` · ${s.rows_per_s.toFixed(1)}/s` : ""}`]);
+    if (s.drive) rows.push(["File", s.drive]);
+  }
+  rows.push(["Preset", s.preset ? s.preset.name : (app.active ? presetName(app.active) : "—")]);
+  rows.push(["Tag", app.tag || "none"]);
+  $("#car-kv").innerHTML = rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("");
+}
+
+// [label, value html, unit, sub text, meter 0..1 or null, level]
+function piTiles(y) {
+  const level = (v, warn, crit) => (!num(v) ? "" : v >= crit ? "crit" : v >= warn ? "warn" : "");
+  return [
+    ["CPU temp", fix(y.cpu_temp_c, 1), "°C", "throttles at 80 °C", num(y.cpu_temp_c) ? y.cpu_temp_c / 85 : null, level(y.cpu_temp_c, 70, 80)],
+    ["CPU load", fix(y.cpu_pct, 0), "%", num(y.load_1m) ? `avg ${y.load_1m.toFixed(2)}${y.cores ? ` · ${y.cores} cores` : ""}` : "", num(y.cpu_pct) ? y.cpu_pct / 100 : null, level(y.cpu_pct, 75, 95)],
+    ["Clock", fix(y.cpu_mhz, 0), "MHz", num(y.cpu_max_mhz) ? `max ${y.cpu_max_mhz.toFixed(0)} MHz` : "", num(y.cpu_mhz) && num(y.cpu_max_mhz) ? y.cpu_mhz / y.cpu_max_mhz : null, ""],
+    ["Memory", fix(y.mem_pct, 0), "%", num(y.mem_total_mb) ? `of ${(y.mem_total_mb / 1024).toFixed(1)} GB` : "", num(y.mem_pct) ? y.mem_pct / 100 : null, level(y.mem_pct, 80, 92)],
+    ["SD card", fix(y.disk_free_gb, 1), "GB free", num(y.disk_pct) ? `${y.disk_pct.toFixed(0)}% used` : "", num(y.disk_pct) ? y.disk_pct / 100 : null, level(y.disk_pct, 85, 95)],
+    ["Uptime", esc(fmtUptime(y.uptime_s)), "", "since power-on", null, ""],
+  ];
+}
+
+function renderPi() {
+  const on = connected() && app.system && !app.system.error;
+  $("#pi-card").classList.toggle("is-off", !on);
+  const y = on ? app.system : {};
+  $("#pi-tiles").innerHTML = piTiles(y).map(([k, v, unit, sub, meter, lvl]) => `
+    <div class="tile${lvl ? " " + lvl : ""}">
+      <div class="k">${esc(k)}</div>
+      <div class="v">${v}${unit ? `<small>${esc(unit)}</small>` : ""}</div>
+      ${meter === null ? "" : `<div class="meter" aria-hidden="true"><i style="width:${Math.max(0, Math.min(1, meter)) * 100}%"></i></div>`}
+      <div class="s">${esc(sub)}</div>
+    </div>`).join("");
+  const power = $("#pi-power");
+  const t = y.throttle;
+  let kind = "", text = "";
+  if (!connected()) text = "";
+  else if (app.system && app.system.error) { kind = "warn"; text = `Pi readings failed: ${app.system.error}`; }
+  else if (!app.system) text = "Update carpi_ble.py on the Pi to see its readings.";
+  else if (!t) text = "Power and throttling flags aren't available on this Pi.";
+  else if (t.now.length) { kind = "crit"; text = `Now: ${t.now.join(", ")}. The car's USB port may not supply 5 V / 3 A.`; }
+  else if (t.since_boot.length) { kind = "warn"; text = `Since boot: ${t.since_boot.join(", ")}. Fine right now.`; }
+  else { kind = "ok"; text = "Power OK: no under-voltage or throttling since boot."; }
+  power.className = `power${kind ? " " + kind : ""}`;
+  power.textContent = text;
+  const lvls = piTiles(y).map((x) => x[5]);
+  const worst = (t && t.now.length) || lvls.includes("crit") ? "crit" : lvls.includes("warn") || (t && t.since_boot.length) ? "warn" : "ok";
+  chip($("#pi-chip"), on ? worst : "", on ? { ok: "Healthy", warn: "Check", crit: "Problem" }[worst] : "—");
+}
+
+function renderDash() {
+  if (app.tab !== "dash") return;
+  renderLink();
+  renderCar();
+  renderPi();
+}
+
 // ---------- start ----------
 
+$(".tabs").addEventListener("click", (e) => {
+  const tab = e.target.closest(".tab");
+  if (tab) showTab(tab.id === "tab-home" ? "home" : "dash");
+});
+setInterval(() => { if (!document.hidden) renderLink(); }, 1000);   // "last reply 3 s ago"
+showTab(app.tab);
 if (!("bluetooth" in navigator)) $("#no-bt").hidden = false;
 if (new URLSearchParams(location.search).has("demo")) { $("#no-bt").hidden = true; connect(true); }
 document.addEventListener("visibilitychange", () => {
