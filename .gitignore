@@ -4,6 +4,11 @@ probes/
 candump/
 tag.txt
 
+# Per-Pi state written by the logger and carpi_ble.py (presets chosen from the phone)
+/active_preset.json
+/presets/
+/supported.json
+
 # Private notes
 notes/
 
