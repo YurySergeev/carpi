@@ -23,7 +23,7 @@ It took two tries. In July, a passive `candump` on the OBD port showed exactly o
 - **Logs automatically.** It detects when the engine starts, opens a new CSV, and closes it when the ignition goes off. Nothing to start by hand.
 - **Won't drain the battery.** It never transmits while the car's bus is asleep.
 - **Survives power cuts.** The car's USB port dies instantly at ignition-off; `fsync` every 5 s and atomic metadata writes mean at most a few seconds are lost.
-- **Lets the phone choose what to log.** Over Bluetooth LE, a small web app picks a preset: which values to read and how often, as a weight per value. Changing presets mid-drive closes the file and starts a new one. [docs/phone-config.md](docs/phone-config.md)
+- **Lets the phone choose what to log.** Over Bluetooth LE, a small web app picks a preset: which values to read and how often, as a weight per value. Changing presets mid-drive closes the file and starts a new one. The same page shows chosen values live, with a warm-up card for cold starts. [docs/phone-config.md](docs/phone-config.md)
 - **Runs as systemd services.** The logger depends on nothing but `python-can`.
 
 How the polling, ISO-TP and state machine work: [docs/how-it-works.md](docs/how-it-works.md)
@@ -103,7 +103,8 @@ Full report: [docs/baseline-2026-09-25.md](docs/baseline-2026-09-25.md)
 - [ ] Full-throttle baseline pulls before the tune
 - [ ] VW-specific data over UDS: per-cylinder knock retard, oil temperature, DSG temperature
 - [x] Choose what to log per drive from the phone (Bluetooth LE)
-- [ ] Live dashboard
+- [x] Live values and a cold-start warm-up card on the phone
+- [ ] Oil temperature (UDS `22 20 2F`, being confirmed against the dash with `probe_oil.py`)
 
 ## A note on safety
 

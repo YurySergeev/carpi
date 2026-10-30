@@ -75,12 +75,14 @@ class FakeEcu(threading.Thread):
 def rig(tmp_path, monkeypatch):
     monkeypatch.setattr(cl, "PRESET_CHECK_EVERY", 0.2)
     monkeypatch.setattr(cl, "STATUS_FILE_EVERY", 0.2)
+    monkeypatch.setattr(cl, "LIVE_FILE_EVERY", 0.2)
     channel = f"carpi-{uuid.uuid4().hex}"
     args = Namespace(channel=channel, interface="virtual", logdir=str(tmp_path / "logs"),
                      tag_file=str(tmp_path / "tag.txt"),
                      preset_file=str(tmp_path / "active_preset.json"),
                      supported_file=str(tmp_path / "supported.json"),
-                     status_file=str(tmp_path / "status.json"), end_after=1.0, hz=50, once=True)
+                     status_file=str(tmp_path / "status.json"),
+                     live_file=str(tmp_path / "live.json"), end_after=1.0, hz=50, once=True)
     ecu = FakeEcu(channel)
     ecu.start()
     logger = threading.Thread(target=cl.run, args=(args,), daemon=True)
@@ -101,6 +103,13 @@ def _wait(cond, timeout=10.0):
 def _status(rig):
     try:
         return json.loads((rig.tmp / "status.json").read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def _live(rig):
+    try:
+        return json.loads((rig.tmp / "live.json").read_text())
     except (OSError, ValueError):
         return {}
 
@@ -182,3 +191,29 @@ def test_unsupported_values_fall_back_to_default(rig):
     [(_, rows, meta)] = _drives(rig)
     assert meta["preset"]["id"] == "default" and "timing_deg" not in rows[0]
 
+
+
+def test_live_snapshot_during_and_after_a_drive(rig):
+    rig.logger.start()
+    assert _wait(lambda: _status(rig).get("rows", 0) >= 40)   # a few rounds of the slow values
+    snap = _live(rig)
+    assert snap["state"] == "logging" and snap["drive"].endswith(".csv")
+    assert time.time() - snap["updated"] < 2
+    values = snap["values"]
+    assert not {"time", "elapsed_s", "clock_ok"} & set(values)
+    value, age = values["rpm"]
+    assert value == 800 and 0 <= age < 2                      # a fast value: read on every row
+    assert values["boost_act_kpa"][0] == 98                   # multi-frame value made it too
+    assert values["coolant_c"][0] == 90                       # a slow value (130 - 40)
+    assert {"rpm", "coolant_c", "volts", "run_time_s"} <= set(values)
+    _finish(rig)
+    assert _live(rig)["state"] == "ended" and _live(rig)["values"] == {}
+
+
+def test_unwritable_live_file_never_stops_logging(rig):
+    rig.args.live_file = str(rig.tmp / "missing-folder" / "live.json")
+    rig.logger.start()
+    assert _wait(lambda: _status(rig).get("rows", 0) >= 20)
+    _finish(rig)
+    [(_, rows, meta)] = _drives(rig)
+    assert meta["complete"] and len(rows) >= 20

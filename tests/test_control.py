@@ -105,3 +105,60 @@ def test_notify_size_caps_at_one_radio_packet():
     reply = b"x" * 3985 + b"\n"
     pieces = cc.chunks(reply, cc.notify_size(517))
     assert len(pieces) == 17 and b"".join(pieces) == reply and max(map(len, pieces)) == 244
+
+
+# ---------- live values for the Live tab ----------
+
+def _write_live(path, age_of_file=0.0, **values):
+    path.write_text(json.dumps({"state": "logging", "drive": "2026-10-30/drive-081502.csv",
+                                "updated": time.time() - age_of_file,
+                                "values": {k: list(v) for k, v in values.items()}}))
+
+
+def test_protocol_is_2_for_the_live_tab(tmp_path):
+    assert cc.PROTOCOL == 2
+    assert _ask(_ctl(tmp_path), rid=1, cmd="hello")["protocol"] == 2
+
+
+def test_live_filters_columns_and_ages_values(tmp_path):
+    _write_live(tmp_path / "live.json", age_of_file=1.0, rpm=(812.0, 0.1), coolant_c=(46, 1.4),
+                volts=(14.1, 0.6))
+    r = _ask(_ctl(tmp_path), rid=1, cmd="live", cols=["rpm", "coolant_c", "oil_c"])
+    live = r["live"]
+    assert r["ok"] and live["state"] == "logging" and live["drive"].endswith(".csv")
+    assert set(live["values"]) == {"rpm", "coolant_c"}             # oil_c isn't being read: just absent
+    value, age = live["values"]["rpm"]
+    assert value == 812.0 and 1.0 <= age < 1.5                      # 0.1 s old when written, file 1 s old
+    assert 2.3 <= live["values"]["coolant_c"][1] < 3.0
+
+
+def test_live_without_cols_returns_everything(tmp_path):
+    _write_live(tmp_path / "live.json", rpm=(812.0, 0.1), coolant_c=(46, 1.4))
+    assert set(_ask(_ctl(tmp_path), rid=1, cmd="live")["live"]["values"]) == {"rpm", "coolant_c"}
+
+
+def test_live_stale_or_missing_file(tmp_path):
+    ctl = _ctl(tmp_path)
+    assert _ask(ctl, rid=1, cmd="live")["live"] == {"state": "unknown", "values": {}}
+    _write_live(tmp_path / "live.json", age_of_file=5.0, rpm=(812.0, 0.1))
+    assert _ask(ctl, rid=2, cmd="live")["live"] == {"state": "not_reading", "values": {}}
+
+
+def test_live_after_drive_end(tmp_path):
+    (tmp_path / "live.json").write_text(json.dumps({"state": "ended", "drive": None,
+                                                    "updated": time.time(), "values": {}}))
+    assert _ask(_ctl(tmp_path), rid=1, cmd="live")["live"] == {"state": "ended", "values": {}}
+
+
+def test_live_path_defaults_next_to_status_and_can_be_set(tmp_path):
+    assert _ctl(tmp_path).live_path == tmp_path / "live.json"
+    other = tmp_path / "elsewhere.json"
+    assert cc.Controller(cp.Store(tmp_path), None, live_path=other).live_path == other
+    assert cc.Controller(cp.Store(tmp_path), None).live_path is None
+
+
+def test_live_reply_is_small(tmp_path):
+    cols = ["rpm", "speed_kph", "boost_act_kpa", "baro_kpa", "coolant_c", "stft_pct", "ltft_pct", "run_time_s"]
+    _write_live(tmp_path / "live.json", **{c: (1234.567, 0.13) for c in cols})
+    out = _ctl(tmp_path).handle_line(json.dumps({"rid": 1, "cmd": "live", "cols": cols}))
+    assert len(out) < 600          # 3 notifications at most, even at a small MTU

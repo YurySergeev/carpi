@@ -1,6 +1,6 @@
-# The phone page: dashboard and logging setup
+# The phone page: dashboard, live values and logging setup
 
-After the phone connects, the page opens on a **Dashboard** tab. A second **Logging** tab holds the tag and the presets described below. The page remembers which tab you used last.
+After the phone connects, the page opens on a **Dashboard** tab. A **Live** tab shows chosen values about twice a second, with a warm-up card for cold starts, and a **Logging** tab holds the tag and the presets described below. The page remembers which tab you used last.
 
 ## Dashboard
 
@@ -26,6 +26,41 @@ The page asks the Pi for `status` every 2 seconds while it's open and in front. 
 **Power flags.** "Under-voltage now" means the car's USB port isn't holding 5 V right now; "since boot" means it dipped at some point. They come from the firmware (`/sys/devices/platform/soc/soc:firmware/get_throttled`, the same value as `vcgencmd get_throttled`).
 
 Try it without the car at `https://yurysergeev.github.io/carpi/config/?demo`, or `?demo=unplugged` for a Pi that's powered but not on the OBD port.
+
+## Live
+
+The **Live** tab shows the latest reading of the values you pick, refreshed about twice a second while the tab is on screen.
+
+- **Values.** The chips list only what the active preset is collecting on this car, plus two worked-out values: **Boost** in psi (actual boost minus barometric pressure) and **Total fuel trim** (short + long). To watch something else live, add it to the preset on the Logging tab. Picking values here never changes what's logged.
+- **Tiles.** A big number, its unit and, in the corner, how old the reading is. Values the preset reads less often show a larger age. A reading older than 5 seconds is greyed out. Tap a tile for a line of its last 60 seconds with the min and max; the line builds up from when the tab opens.
+- **Units.** °C/°F and mph/km/h, remembered on the phone.
+- **Warm-up card.** For cold starts: a stage, one line of advice, oil and coolant temperature, and a rough "full power in ~N min" from how fast the temperature rose over the last minute. Tap its header to collapse or expand it at any time; the phone remembers your choice. With no choice saved, it collapses by itself once the engine is warm.
+
+| Stage | Oil | Coolant (stand-in) | Advice |
+| --- | --- | --- | --- |
+| Cold | under 60 °C | under 70 °C | Drive gently: under ~3,000 rpm, light throttle, no hard boost |
+| Warming up | 60–80 °C | 70–90 °C | Normal driving is fine; save full throttle for later |
+| Warm | 80 °C and up | 90 °C and up | Full power OK |
+
+Until oil temperature is confirmed on this car (next section), the card runs on coolant and says so, with higher thresholds because coolant warms faster than oil. These are general warm-up guidelines, not Audi's numbers; the thresholds are at the top of the live section in `web/config/config.js`.
+
+**How it works.** The logger already holds the latest reading of everything it polls. While it's reading the car it rewrites `/run/carpi/live.json` (RAM, not the SD card) twice a second, and the phone's `live` request reads that file through `carpi_ble.py`. The phone never makes the Pi send anything extra to the car. Try it without the car at `…/carpi/config/?demo` (a sped-up cold start) or `?demo=oil` (as if oil temperature were set up).
+
+**Updating the Pi for the Live tab.** In an SSH session on the Pi: `cd ~/carpi && git pull && sudo systemctl restart carpi-logger carpi-ble`. An older Pi still works with the new page; the Live tab just explains that it needs this update.
+
+## Oil temperature (being confirmed)
+
+This A3's engine doesn't offer the standard OBD-II oil-temperature value (PID `0x5C`), so oil temperature needs a VW-specific read: UDS ReadDataByIdentifier, `22 20 2F`. That identifier is a candidate from earlier research and isn't confirmed on this car yet. Oil pressure isn't readable: this engine has pressure switches, not a sensor.
+
+`probe_oil.py` checks it once, against the oil temperature the dash shows. It only sends `01 00`, `22 20 2F` and `01 05` (coolant, for comparison): no session change, no security access, no other identifiers. In an SSH session on the Pi, ideally from a cold start:
+
+```bash
+sudo systemctl stop carpi-logger
+python3 ~/carpi/probe_oil.py --watch       # a reading every 2 s; Ctrl+C to stop
+sudo systemctl start carpi-logger
+```
+
+Note what the dash shows for oil temperature, and the elapsed seconds on screen, at a few points as the engine warms (cold, about 60 °C, fully warm). The script prints the raw bytes and a few candidate conversions, and saves everything to `~/carpi/probes/oil-check-<time>.csv`. If one conversion tracks the dash at three or more points, the logger can read it as a normal value (`oil_c`) and the warm-up card switches to oil by itself. If the engine refuses the identifier, the script says so and stops; oil temperature then waits for a VW tool (VCDS) to confirm the right one.
 
 ## Choosing what to log
 
@@ -119,4 +154,4 @@ The protocol has one GATT service with two characteristics. The UUIDs are in `ca
 - **RX** (the phone writes): requests as JSON lines ending in `\n`, in chunks of any size.
 - **TX** (the Pi notifies): one JSON line per reply, split to fit the link's MTU.
 
-Commands are `hello`, `state`, `status`, `save`, `delete`, `activate` and `tag`. `status` (and `state`, which includes it) returns three objects: `status` from the logger, `system` and `obd` from `carpi_system.py`, which `carpi_ble.py` samples every 2 seconds. They're documented at the top of `carpi_control.py`, and `tests/test_control.py` exercises them. Both characteristics require an encrypted (paired) link.
+Commands are `hello`, `state`, `status`, `live`, `save`, `delete`, `activate` and `tag`; `hello` reports the protocol version (2 since `live` was added). `live` returns the logger's latest readings for the columns the phone asks for, each with its age in seconds. `status` (and `state`, which includes it) returns three objects: `status` from the logger, `system` and `obd` from `carpi_system.py`, which `carpi_ble.py` samples every 2 seconds. They're documented at the top of `carpi_control.py`, and `tests/test_control.py` exercises them. Both characteristics require an encrypted (paired) link.

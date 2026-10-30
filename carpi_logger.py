@@ -29,11 +29,13 @@ Output (default ~/carpi/logs/), one folder per day, e.g. logs/2026-09-26/:
 Tag drives for before/after comparisons by putting one word in ~/carpi/tag.txt
 (e.g. "pre-pcv"). The tag is copied into each new drive's metadata.
 
-Status for the phone: /run/carpi/status.json (state, current file, rows, request rate), on
-tmpfs so it costs the SD card nothing.
+Status for the phone: /run/carpi/status.json (state, current file, rows, request rate), and
+/run/carpi/live.json (latest reading of every value, rewritten twice a second while logging) for
+the Live tab. Both on tmpfs, so they cost the SD card nothing.
 
 Read-only: standard OBD-II Mode 01 requests only, same as any scan tool. A preset can only
-choose among the PIDs below.
+choose among the PIDs below. Engine.read_did (UDS 0x22, also read-only) is used only by
+probe_oil.py until the oil-temperature identifier is confirmed on the car.
 """
 import argparse
 import csv
@@ -63,6 +65,8 @@ CLOCK_SYNCED = Path("/run/systemd/timesync/synchronized")  # exists once NTP has
 STATUS_EVERY = 15.0
 PRESET_CHECK_EVERY = 1.0
 STATUS_FILE_EVERY = 2.0
+LIVE_FILE_EVERY = 0.5   # latest values for the phone's Live tab (it asks twice a second)
+NOT_VALUES = {"time", "elapsed_s", "clock_ok"}
 
 
 def u16(d, i):
@@ -107,15 +111,35 @@ def log(msg):
     print(f"{datetime.now():%H:%M:%S} {msg}", flush=True)
 
 
-class StatusFile:
-    """Small JSON snapshot for carpi_ble.py. Best effort: a missing or read-only folder just
-    means no status, never a logger crash."""
+class SnapshotFile:
+    """A small JSON file for carpi_ble.py, replaced atomically (tmp file + rename). Best effort:
+    a missing or read-only folder just means no snapshot, never a logger crash."""
+
+    def __init__(self, path, what):
+        self.path = Path(path).expanduser() if path else None
+        self.what = what
+        self.warned = False
+
+    def write(self, obj):
+        if self.path is None:
+            return
+        try:
+            tmp = self.path.with_name(self.path.name + ".tmp")
+            tmp.write_text(json.dumps(dict(obj, updated=time.time())))
+            os.replace(tmp, self.path)
+        except OSError as e:
+            if not self.warned:
+                log(f"{self.what} file {self.path} not writable ({e}); phone {self.what} off")
+                self.warned = True
+
+
+class StatusFile(SnapshotFile):
+    """State, current file, rows and request rate, for the phone's dashboard."""
 
     def __init__(self, path):
-        self.path = Path(path).expanduser() if path else None
+        super().__init__(path, "status")
         self.fields = {"state": "waiting", "req_per_s": None}
         self.last = 0.0
-        self.warned = False
 
     def update(self, force=False, **fields):
         self.fields.update(fields)
@@ -123,14 +147,40 @@ class StatusFile:
         if self.path is None or (not force and now - self.last < STATUS_FILE_EVERY):
             return
         self.last = now
-        try:
-            tmp = self.path.with_name(self.path.name + ".tmp")
-            tmp.write_text(json.dumps(dict(self.fields, updated=time.time())))
-            os.replace(tmp, self.path)
-        except OSError as e:
-            if not self.warned:
-                log(f"status file {self.path} not writable ({e}); phone status off")
-                self.warned = True
+        self.write(self.fields)
+
+
+class LiveFile(SnapshotFile):
+    """The latest reading of every value in the current drive, for the phone's Live tab:
+    {"state", "drive", "values": {column: [value, seconds since it was read]}}."""
+
+    def __init__(self, path):
+        super().__init__(path, "live")
+
+    def logging(self, drive, latest, seen_at):
+        now = time.monotonic()
+        values = {c: [v, round(now - seen_at[c], 2)] for c, v in latest.items() if c in seen_at}
+        self.write({"state": "logging", "drive": drive, "values": values})
+
+    def ended(self):
+        self.write({"state": "ended", "drive": None, "values": {}})
+
+
+class NegativeResponse(Exception):
+    """The engine refused a UDS request (7F <service> <code>)."""
+    MEANINGS = {
+        0x11: "the service isn't supported",
+        0x12: "the sub-function isn't supported",
+        0x13: "the request has the wrong length",
+        0x22: "conditions aren't right (e.g. engine state)",
+        0x31: "this identifier isn't supported",
+        0x33: "security access is required",
+        0x7F: "not available in the current diagnostic session",
+    }
+
+    def __init__(self, code):
+        self.code = code
+        super().__init__(f"0x{code:02X}: {self.MEANINGS.get(code, 'unknown reason')}")
 
 
 class Engine:
@@ -160,13 +210,18 @@ class Engine:
         except can.CanError:
             return False
 
-    def request(self, pid, service=0x01):
-        """One Mode 01 request. Returns the data bytes after the PID, or None."""
+    def _transact(self, req, req_id=None):
+        """Send one single-frame request (up to 7 bytes) and return the engine's reply payload,
+        reassembled if it's multi-frame, or None if nothing came back."""
         self.drain()
         self.requests += 1
-        if not self._send(self.req_id, [0x02, service, pid]):
+        if not self._send(self.req_id if req_id is None else req_id, [len(req)] + list(req)):
             return None
-        deadline = time.monotonic() + REPLY_TIMEOUT
+        return self._receive(REPLY_TIMEOUT)
+
+    def _receive(self, timeout):
+        """One reply from the engine (minimal ISO-TP), or None."""
+        deadline = time.monotonic() + timeout
         buf, expected, seq = None, 0, 1
         while (remaining := deadline - time.monotonic()) > 0:
             rx = self.recv(remaining)
@@ -177,7 +232,7 @@ class Engine:
             d = bytes(rx.data)
             kind = d[0] >> 4
             if kind == 0:                                    # single frame
-                return self._payload(d[1:1 + (d[0] & 0x0F)], service, pid)
+                return d[1:1 + (d[0] & 0x0F)]
             if kind == 1:                                    # first frame -> send flow control
                 expected = ((d[0] & 0x0F) << 8) | d[1]
                 buf, seq = bytearray(d[2:8]), 1
@@ -189,14 +244,33 @@ class Engine:
                 seq += 1
                 buf += d[1:8]
                 if len(buf) >= expected:
-                    return self._payload(bytes(buf[:expected]), service, pid)
+                    return bytes(buf[:expected])
                 deadline = time.monotonic() + REPLY_TIMEOUT
         return None
 
-    @staticmethod
-    def _payload(p, service, pid):
-        if len(p) >= 2 and p[0] == service + 0x40 and p[1] == pid:
+    def request(self, pid, service=0x01):
+        """One Mode 01 request. Returns the data bytes after the PID, or None."""
+        p = self._transact([service, pid])
+        if p is not None and len(p) >= 2 and p[0] == service + 0x40 and p[1] == pid:
             return p[2:]
+        return None
+
+    def read_did(self, did, pending_wait=2.0):
+        """UDS ReadDataByIdentifier (0x22) for one identifier, on the engine's physical address,
+        in whatever diagnostic session the engine is already in. Returns the data bytes after the
+        identifier, or None if there was no reply. Raises NegativeResponse if the engine refuses.
+        Read-only by definition: 0x22 can't change anything in the ECU."""
+        hi, lo = did >> 8, did & 0xFF
+        p = self._transact([0x22, hi, lo], req_id=ENGINE_TX)
+        give_up = time.monotonic() + pending_wait
+        while p is not None and p[:3] == bytes([0x7F, 0x22, 0x78]) and time.monotonic() < give_up:
+            p = self._receive(give_up - time.monotonic())   # "response pending": the answer follows
+        if p is None:
+            return None
+        if len(p) >= 3 and p[0] == 0x7F and p[1] == 0x22:
+            raise NegativeResponse(p[2])
+        if len(p) >= 3 and p[0] == 0x62 and p[1] == hi and p[2] == lo:
+            return bytes(p[3:])
         return None
 
     def detect(self):
@@ -276,9 +350,10 @@ def save_supported(args, supported):
             log(f"couldn't save {path}: {e}")
 
 
-def log_drive(engine, args, status, follows=None):
+def log_drive(engine, args, status, follows=None, live=None):
     """Log one drive (or one segment of it). Returns (how it ended, CSV name or None if nothing
     was saved). Ends on engine silence or, with "preset_change", when the active preset changes."""
+    live = live or LiveFile(None)
     started = datetime.now()
     supported = engine.supported()
     save_supported(args, supported)
@@ -316,8 +391,9 @@ def log_drive(engine, args, status, follows=None):
     rows, ended_by = 0, "stopped"
     t0 = time.monotonic()
     req0 = engine.requests
-    last_reply = last_sync = last_status = last_meta = last_check = t0
+    last_reply = last_sync = last_status = last_meta = last_check = last_live = t0
     latest = {}
+    seen_at = {}         # column -> when it was last read (monotonic), for the live snapshot
     status.update(force=True, state="logging", drive=name, rows=0, elapsed_s=0,
                   preset=meta["preset"], rows_per_s=None)
     with open(csv_path, "x", newline="", buffering=1) as f:   # "x": never truncate an existing file
@@ -347,6 +423,7 @@ def log_drive(engine, args, status, follows=None):
                     rows += 1
                     last_reply = now
                     latest.update(row)
+                    seen_at.update((c, now) for c in row if c not in NOT_VALUES)
                 elif now - last_reply > args.end_after:
                     ended_by = "engine_off"
                     break
@@ -359,6 +436,9 @@ def log_drive(engine, args, status, follows=None):
                         log(f"preset changed to '{current['name']}'; starting a new file")
                         ended_by = "preset_change"
                         break
+                if now - last_live >= LIVE_FILE_EVERY:
+                    live.logging(name, latest, seen_at)
+                    last_live = now
                 if now - last_sync > FSYNC_EVERY:
                     os.fsync(f.fileno())
                     last_sync = now
@@ -378,6 +458,7 @@ def log_drive(engine, args, status, follows=None):
                         f" | boost {latest.get('boost_act_kpa', '-')} kPa")
                     last_status = now
         finally:
+            live.ended()
             os.fsync(f.fileno())
             duration = round(time.monotonic() - t0, 1)
             if rows == 0:
@@ -400,6 +481,7 @@ def run(args):
     ])
     engine = Engine(bus)
     status = StatusFile(args.status_file)
+    live = LiveFile(args.live_file)
     tries_left = DETECT_TRIES
     was_quiet = True
     drives = 0
@@ -425,10 +507,10 @@ def run(args):
             tries_left -= 1
             status.update(state="detecting")
             if engine.detect():
-                ended_by, follows = log_drive(engine, args, status)
+                ended_by, follows = log_drive(engine, args, status, live=live)
                 drives += 1
                 while ended_by == "preset_change":    # engine still running: no re-detect needed
-                    ended_by, follows = log_drive(engine, args, status, follows)
+                    ended_by, follows = log_drive(engine, args, status, follows, live=live)
                     drives += 1
                 status.update(force=True, state="detecting", drive=None, rows=None,
                               elapsed_s=None, rows_per_s=None)
@@ -451,6 +533,8 @@ def main():
     ap.add_argument("--supported-file", default="~/carpi/supported.json")
     ap.add_argument("--status-file", default="/run/carpi/status.json",
                     help="status snapshot for carpi_ble.py ('' = off)")
+    ap.add_argument("--live-file", default="/run/carpi/live.json",
+                    help="latest values for the phone's Live tab ('' = off)")
     ap.add_argument("--end-after", type=float, default=8.0,
                     help="seconds of engine silence that end a drive")
     ap.add_argument("--hz", type=float, default=10.0, help="max rows per second")

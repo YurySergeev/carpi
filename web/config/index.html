@@ -9,8 +9,8 @@
   <meta name="robots" content="noindex">
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="manifest" href="manifest.webmanifest">
-  <link rel="stylesheet" href="config.css?v=3">
-  <script src="config.js?v=3" defer></script>
+  <link rel="stylesheet" href="config.css?v=4">
+  <script src="config.js?v=4" defer></script>
 </head>
 <body>
   <div class="page">
@@ -33,6 +33,7 @@
 
     <nav class="tabs" role="tablist" aria-label="Sections">
       <button class="tab" type="button" role="tab" id="tab-dash" aria-controls="dash" aria-selected="true">Dashboard</button>
+      <button class="tab" type="button" role="tab" id="tab-live" aria-controls="live" aria-selected="false">Live</button>
       <button class="tab" type="button" role="tab" id="tab-home" aria-controls="home" aria-selected="false">Logging</button>
     </nav>
 
@@ -61,6 +62,43 @@
       <section class="card" id="debug-card" hidden>
         <div class="card-head"><h2>Debug log</h2><button class="btn small" id="debug-copy" type="button">Copy</button></div>
         <pre class="debug" id="debug-log">Connect to start logging Bluetooth traffic.</pre>
+      </section>
+    </main>
+
+    <main id="live" role="tabpanel" aria-labelledby="tab-live" hidden>
+      <p class="notice" id="live-hint" hidden></p>
+
+      <section class="card warmup" id="warmup">
+        <button class="card-head w-toggle" id="w-toggle" type="button" aria-expanded="true" aria-controls="w-body">
+          <h2>Warm-up <span class="chev" aria-hidden="true">▾</span></h2>
+          <span class="chip" id="w-chip">—</span>
+        </button>
+        <p class="w-summary" id="w-summary"></p>
+        <div id="w-body">
+          <p class="stage" id="w-stage">—</p>
+          <p class="advice" id="w-advice"></p>
+          <div class="temps">
+            <div>Oil<strong id="w-oil">—</strong></div>
+            <div>Coolant<strong id="w-cool">—</strong></div>
+            <div>Full power in<strong id="w-eta">—</strong></div>
+          </div>
+          <div class="wbar" aria-hidden="true"><i id="w-bar"></i></div>
+          <div class="marks" aria-hidden="true"><span>cold</span><span id="w-m1"></span><span id="w-m2"></span></div>
+          <p class="standin" id="w-standin" hidden></p>
+        </div>
+      </section>
+
+      <section>
+        <div class="section-head">
+          <h2>Values</h2>
+          <span class="units">
+            <button class="unit" id="u-temp" type="button" aria-label="Temperature unit">°C</button>
+            <button class="unit" id="u-speed" type="button" aria-label="Speed unit">mph</button>
+          </span>
+        </div>
+        <div class="vchips" id="live-chips" role="group" aria-label="Values to show"></div>
+        <p class="hint">Only values the active preset is collecting are listed. To watch something else live, add it to the preset on the Logging tab. Tap a tile for its trend.</p>
+        <div class="ltiles" id="live-tiles"></div>
       </section>
     </main>
 

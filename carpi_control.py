@@ -19,6 +19,12 @@ Requests:  {"rid": 7, "cmd": "<name>", ...}       Replies: {"rid": 7, "ok": true
                              obd     can0 state, frames/s, seconds since the last frame and a
                                      verdict: checking | traffic | quiet | down | bus_off |
                                      no_interface
+  live     cols (optional list)  latest reading of each value the logger is collecting, for
+                           the Live tab (polled twice a second while it's open):
+                             {"live": {"state", "drive", "values": {col: [value, age_s]}}}
+                           state: logging | ended (drive just ended) | not_reading (the
+                           logger's live.json is stale) | unknown (no file). Only columns in
+                           cols are returned; the phone asks for the ones on screen.
   save     preset, activate (bool)   create or overwrite a saved preset
   delete   id
   activate id              the logger picks it up within a second (mid-drive: new file)
@@ -30,13 +36,14 @@ from pathlib import Path
 
 import carpi_presets as presets
 
-PROTOCOL = 1
+PROTOCOL = 2            # 2: the "live" request
 SERVICE_UUID = "6c2a0001-4f3b-4d1e-9a57-3c8e2b7d5f10"
 RX_UUID = "6c2a0002-4f3b-4d1e-9a57-3c8e2b7d5f10"      # phone writes requests here
 TX_UUID = "6c2a0003-4f3b-4d1e-9a57-3c8e2b7d5f10"      # Pi notifies replies here
 MAX_LINE = 4096
 NOTIFY_MAX = 244        # bytes per reply notification: fits one LE data packet (251 - 4 L2CAP - 3 ATT)
 STATUS_STALE_S = 10.0
+LIVE_STALE_S = 3.0      # the logger rewrites live.json every 0.5 s while it's reading the car
 
 
 class LineBuffer:
@@ -76,12 +83,33 @@ def catalog():
 
 
 class Controller:
-    def __init__(self, store, status_path, system=None):
+    def __init__(self, store, status_path, system=None, live_path=None):
         """system: a callable returning {"system": {...}, "obd": {...}} (carpi_system.Sampler
-        .snapshot), or None where there's no Pi to read (tests)."""
+        .snapshot), or None where there's no Pi to read (tests). live_path defaults to
+        live.json next to the status file."""
         self.store = store
         self.status_path = Path(status_path) if status_path else None
         self.system = system
+        if live_path is None and self.status_path is not None:
+            live_path = self.status_path.with_name("live.json")
+        self.live_path = Path(live_path) if live_path else None
+
+    def live_values(self, cols=None):
+        """The logger's latest readings, with each value's age brought up to now."""
+        data = presets.read_json(self.live_path) if self.live_path else None
+        if not isinstance(data, dict) or not isinstance(data.get("values"), dict):
+            return {"state": "unknown", "values": {}}
+        file_age = time.time() - data.get("updated", 0)
+        if file_age > LIVE_STALE_S:
+            return {"state": "not_reading", "values": {}}    # logger stopped, crashed or idle
+        wanted = set(cols) if isinstance(cols, list) else None
+        values = {c: [v[0], round(v[1] + max(file_age, 0), 2)]
+                  for c, v in data["values"].items()
+                  if (wanted is None or c in wanted) and isinstance(v, list) and len(v) == 2}
+        out = {"state": data.get("state", "unknown"), "values": values}
+        if data.get("drive"):
+            out["drive"] = data["drive"]
+        return out
 
     def status(self):
         data = presets.read_json(self.status_path) if self.status_path else None
@@ -117,6 +145,8 @@ class Controller:
             return self.state()
         if cmd == "status":
             return self.live()
+        if cmd == "live":
+            return {"live": self.live_values(msg.get("cols"))}
         if cmd == "save":
             saved = self.store.save(msg.get("preset"))
             if msg.get("activate"):

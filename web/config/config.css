@@ -10,6 +10,7 @@
   --accent-chip: color-mix(in srgb, var(--accent) 14%, transparent);
   --pass: #7fc79a;
   --warn: #e0896b;
+  --cold: #7fb0e0;
   --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   color-scheme: dark;
@@ -189,7 +190,7 @@ dialog p { margin: 0 0 1rem; color: var(--head); }
 /* ---------- tabs ---------- */
 .tabs {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(3, 1fr);
   gap: 0.25rem;
   padding: 0.25rem;
   margin: 0 0 1.25rem;
@@ -265,3 +266,50 @@ dialog p { margin: 0 0 1rem; color: var(--head); }
   overflow-wrap: anywhere;
   color: var(--head);
 }
+
+/* ---------- live ---------- */
+.w-toggle { width: 100%; font: inherit; color: inherit; background: none; border: 0; padding: 0; text-align: left; cursor: pointer; }
+.chev { display: inline-block; font-size: 0.8rem; color: var(--text); transition: transform 0.2s ease; }
+.warmup.collapsed .chev { transform: rotate(-90deg); }
+.warmup.collapsed #w-body { display: none; }
+.w-summary { display: none; margin: 0.4rem 0 0; color: var(--head); font-size: 0.92rem; }
+.warmup.collapsed .w-summary { display: block; }
+.stage { margin: 0.6rem 0 0; color: var(--head); font-size: 1.15rem; font-weight: 650; }
+.stage.cold { color: var(--cold); }
+.stage.warming { color: var(--accent); }
+.stage.warm { color: var(--pass); }
+.advice { margin: 0.15rem 0 0; color: var(--head); font-size: 0.93rem; min-height: 1.2em; }
+.temps { display: flex; flex-wrap: wrap; gap: 0.5rem 1.4rem; margin-top: 0.8rem; font-size: 0.8rem; }
+.temps strong { display: block; color: var(--head); font-size: 1.35rem; font-weight: 650; line-height: 1.2; font-variant-numeric: tabular-nums; }
+.temps strong small { font-size: 0.8rem; color: var(--text); font-weight: 500; margin-left: 0.15rem; }
+.wbar { position: relative; height: 0.5rem; border-radius: 999px; background: var(--card-hi); margin-top: 0.9rem; overflow: hidden; }
+.wbar > i { position: absolute; inset: 0 auto 0 0; width: 0; border-radius: inherit;
+  background: linear-gradient(90deg, var(--cold), var(--accent) 70%, var(--pass)); transition: width 0.4s ease; }
+.marks { display: flex; justify-content: space-between; font-family: var(--mono); font-size: 0.68rem; margin-top: 0.25rem; }
+.standin { margin: 0.75rem 0 0; font-size: 0.82rem; border-left: 2px solid var(--line); padding-left: 0.6rem; }
+
+.units { display: inline-flex; gap: 0.35rem; }
+.unit { font: inherit; font-family: var(--mono); font-size: 0.75rem; color: var(--head); background: transparent;
+  border: 1px solid var(--line); border-radius: 999px; padding: 0.15rem 0.6rem; min-height: 2rem; cursor: pointer; }
+.vchips { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.vchip { font: inherit; font-size: 0.82rem; color: var(--text); background: transparent; border: 1px solid var(--line);
+  border-radius: 999px; padding: 0.3rem 0.7rem; min-height: 2.1rem; cursor: pointer; }
+.vchip[aria-pressed="true"] { color: var(--accent); background: var(--accent-chip); border-color: color-mix(in srgb, var(--accent) 55%, transparent); }
+
+.ltiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.6rem; }
+.ltile { display: block; width: 100%; min-width: 0; text-align: left; font: inherit; color: inherit; cursor: pointer;
+  background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 0.7rem 0.8rem 0.75rem; }
+.ltile.open { grid-column: 1 / -1; border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+.ltile > span { display: block; }
+.ltile .k { display: flex; justify-content: space-between; gap: 0.5rem; font-size: 0.8rem; }
+.ltile .age { font-family: var(--mono); font-size: 0.68rem; white-space: nowrap; }
+.ltile .v { color: var(--head); font-size: 2rem; font-weight: 650; line-height: 1.15; font-variant-numeric: tabular-nums;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ltile .v small { font-size: 0.85rem; font-weight: 500; color: var(--text); margin-left: 0.2rem; }
+.ltile.stale .v { color: var(--text); opacity: 0.55; }
+.ltile .trend { display: none; margin-top: 0.4rem; }
+.ltile.open .trend { display: block; }
+.trend svg { display: block; width: 100%; height: 70px; }
+.trend polyline { fill: none; stroke: var(--accent); stroke-width: 1.6; vector-effect: non-scaling-stroke; }
+.trend .mm { display: flex; justify-content: space-between; font-family: var(--mono); font-size: 0.68rem; }
+@media (prefers-reduced-motion: reduce) { .chev, .wbar > i { transition: none; } }

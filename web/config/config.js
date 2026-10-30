@@ -188,6 +188,10 @@ class DemoLink {
     ];
     const viewer = new Set(["0C", "0D", "06", "07", "05", "44", "70", "33"]);
     this.catalog = catalog.map(([id, label, unit, group, columns]) => ({ id, label, unit, group, columns, viewer: viewer.has(id) }));
+    // ?demo=oil: pretend the oil-temperature identifier has been confirmed and added
+    if (new URLSearchParams(location.search).get("demo") === "oil") {
+      this.catalog.push({ id: "OI", label: "Oil temperature", unit: "°C", group: "Temperatures", columns: ["oil_c"], viewer: false });
+    }
     const ids = this.catalog.map((c) => c.id);
     const w = (pairs) => Object.fromEntries(ids.filter((id) => pairs[id]).map((id) => [id, pairs[id]]));
     this.builtin = [
@@ -207,7 +211,7 @@ class DemoLink {
     this.onclose = null;
   }
 
-  async connect() { await new Promise((r) => setTimeout(r, 400)); this.connected = true; }
+  async connect() { await new Promise((r) => setTimeout(r, 400)); this.connected = true; this.engineOn = Date.now(); }
   disconnect() { this.connected = false; if (this.onclose) this.onclose(); }
 
   find(id) { return this.builtin.concat(this.user).find((p) => p.id === id); }
@@ -246,6 +250,45 @@ class DemoLink {
     };
   }
 
+  // A cold start, sped up so the warm-up stages change within a few minutes. t = seconds running.
+  sim(t) {
+    const wob = (a) => (Math.random() - 0.5) * 2 * a;
+    const driving = t > 45;
+    const phase = Math.sin(t / 5);
+    const boost = driving ? Math.max(0, 40 * phase + wob(4)) : 0;          // kPa over baro
+    return {
+      rpm: driving ? 1900 + 700 * phase + wob(60) : 1150 - Math.min(t, 40) * 8 + wob(20),
+      speed_kph: driving ? Math.max(0, 55 + 25 * Math.sin(t / 9)) : 0,
+      map_kpa: 35 + boost * 0.9 + (driving ? 30 : 0), boost_act_kpa: 98 + boost, boost_cmd_kpa: 98 + boost,
+      load_pct: driving ? 35 + 30 * phase : 22, abs_load_pct: driving ? 40 + 30 * phase : 18,
+      timing_deg: driving ? 14 + wob(4) : 2 + wob(1), stft_pct: wob(2), ltft_pct: driving ? 1.6 : 4.7,
+      lambda: 1 + wob(0.01), lambda_cmd: 1, o2s1_ma: wob(0.05), rail_kpa: driving ? 13000 : 5700,
+      pedal_pct: driving ? 25 + 15 * Math.max(0, phase) : 14.5, throttle_pct: driving ? 20 + 15 * Math.max(0, phase) : 3,
+      coolant_c: Math.min(91, 8 + t * 0.35), oil_c: Math.min(96, 6 + t * 0.22),
+      iat_c: 9 + t * 0.02, ambient_c: 4, cat_temp_c: 200 + t * 2, o2s2_v: 0.7, o2s2_trim_pct: 0,
+      lt_o2s2_trim_pct: 0, volts: 14.2 + wob(0.1), baro_kpa: 98, fuel_pct: 41, run_time_s: t,
+    };
+  }
+
+  // Same shape as carpi_control.Controller.live_values().
+  liveValues(cols) {
+    if (this.unplugged) return { state: "not_reading", values: {} };
+    const preset = this.find(this.active);
+    const top = Math.max(...Object.values(preset.weights));
+    const sim = this.sim((Date.now() - this.engineOn) / 1000);
+    const values = {};
+    for (const c of this.catalog) {
+      const w = preset.weights[c.id];
+      if (!(w > 0) || !this.supported.includes(c.id)) continue;
+      for (const col of c.columns) {
+        if ((cols && !cols.includes(col)) || !(col in sim)) continue;
+        const age = w >= top ? 0.05 + Math.random() * 0.1 : 0.1 + Math.random() * 1.5;
+        values[col] = [+sim[col].toFixed(3), +age.toFixed(2)];
+      }
+    }
+    return { state: "logging", drive: "2026-10-30/drive-071502.csv", values };
+  }
+
   state() {
     const presets = this.builtin.map((p) => ({ ...p, builtin: true }))
       .concat([...this.user].sort((a, b) => a.name.localeCompare(b.name)).map((p) => ({ ...p, builtin: false })));
@@ -256,9 +299,10 @@ class DemoLink {
     await new Promise((r) => setTimeout(r, 150));
     const fail = (error) => { throw new Error(error); };
     switch (cmd) {
-      case "hello": return { ok: true, protocol: 1, catalog: this.catalog, max_weight: 20, ...this.state() };
+      case "hello": return { ok: true, protocol: 2, catalog: this.catalog, max_weight: 20, ...this.state() };
       case "state": return { ok: true, ...this.state() };
       case "status": return { ok: true, ...this.live() };
+      case "live": return { ok: true, live: this.liveValues(args.cols) };
       case "save": {
         const p = args.preset;
         if (!NAME_OK.test((p.name || "").trim())) fail("name: 1-32 letters, digits, spaces or . ( ) & + - _");
@@ -328,7 +372,11 @@ function fmtDuration(s) {
 const app = {
   link: null, catalog: [], maxWeight: 20, presets: [], active: null, tag: "", supported: null,
   status: { state: "unknown" }, open: null, editing: null, dirty: false, timer: null,
-  system: null, obd: null, lastReply: 0, rtt: null, tab: store("carpi.tab") === "home" ? "home" : "dash",
+  system: null, obd: null, lastReply: 0, rtt: null,
+  tab: ["home", "live"].includes(store("carpi.tab")) ? store("carpi.tab") : "dash",
+  protocol: null, liveTimer: null, live: null, liveHist: {}, liveOpen: new Set(), warmHist: [],
+  liveSel: Array.isArray(store("carpi.live")) ? store("carpi.live") : null,   // null: the defaults
+  units: { temp: "C", speed: "mph", ...(store("carpi.units") || {}) },
 };
 
 function speed() {
@@ -341,6 +389,7 @@ function speed() {
 function applyState(msg) {
   if (msg.catalog) app.catalog = msg.catalog;
   if (msg.max_weight) app.maxWeight = msg.max_weight;
+  if ("protocol" in msg) app.protocol = msg.protocol;
   if (msg.presets) app.presets = msg.presets;
   if ("active" in msg) app.active = msg.active;
   if ("tag" in msg) app.tag = msg.tag;
@@ -354,7 +403,7 @@ function applyState(msg) {
     if (msg.status.hz) store("carpi.hz", msg.status.hz);
   }
   // A status poll redraws only the status card: rebuilding the list mid-tap would eat the tap.
-  if (msg.presets) render(); else { renderConn(false); renderStatus(); renderDash(); }
+  if (msg.presets) render(); else { renderConn(false); renderStatus(); renderDash(); renderLive(); }
 }
 
 function toast(text, error = false) {
@@ -443,9 +492,10 @@ function startPolling() {
       applyState(msg);
     } catch { /* next tick */ } finally { inFlight = false; }
   }, STATUS_EVERY_MS);
+  startLive();
 }
 
-function stopPolling() { clearInterval(app.timer); app.timer = null; }
+function stopPolling() { clearInterval(app.timer); app.timer = null; stopLive(); }
 
 function setPill(kind, text) {
   const pill = $("#conn-pill");
@@ -461,6 +511,7 @@ function render() {
   renderStatus();
   renderPresets();
   renderDash();
+  renderLive();
 }
 
 function renderConn(withList = true) {
@@ -470,7 +521,7 @@ function renderConn(withList = true) {
   $("#connect").classList.toggle("primary", !on);
   for (const el of ["#tag-input", "#tag-save", "#new-preset"]) $(el).disabled = !on;
   if (!on && withList) renderPresets();
-  if (!on) renderDash();
+  if (!on) { renderDash(); renderLive(); }
 }
 
 function presetName(id) {
@@ -690,12 +741,13 @@ $("#save-apply").addEventListener("click", () => save(true));
 function showTab(tab) {
   app.tab = tab;
   store("carpi.tab", tab);
-  $("#dash").hidden = tab !== "dash";
-  $("#home").hidden = tab !== "home";
-  $("#tab-dash").setAttribute("aria-selected", String(tab === "dash"));
-  $("#tab-home").setAttribute("aria-selected", String(tab === "home"));
-  $("#page-title").textContent = tab === "dash" ? "Dashboard" : "Logging";
+  for (const t of ["dash", "live", "home"]) {
+    $(`#${t}`).hidden = tab !== t;
+    $(`#tab-${t}`).setAttribute("aria-selected", String(tab === t));
+  }
+  $("#page-title").textContent = { dash: "Dashboard", live: "Live", home: "Logging" }[tab];
   if (tab === "dash") renderDash();
+  if (tab === "live") renderLive();
 }
 
 function chip(el, kind, text, live = false) {
@@ -848,11 +900,384 @@ function renderDash() {
   renderPi();
 }
 
+// ---------- live ----------
+// The Live tab asks for the logger's latest readings ("live", carpi_control.py) twice a second
+// while it's on screen. It only shows values the active preset collects: it never changes logging.
+
+const LIVE_EVERY_MS = 500;
+const LIVE_STALE_S = 5;          // a reading older than this is greyed out
+const TREND_S = 60;
+const DEFAULT_TILES = ["rpm", "speed_kph", "boost", "coolant_c"];
+// Warm-up stages in °C. Oil when the logger reads it; otherwise coolant stands in, with higher
+// thresholds because coolant warms faster than oil. General guidance, not Audi's numbers.
+const WARMUP = { oil: { warming: 60, warm: 80 }, coolant: { warming: 70, warm: 90 } };
+const STAGES = {
+  cold: ["Cold", "Drive gently: under ~3,000 rpm, light throttle, no hard boost."],
+  warming: ["Warming up", "Normal driving is fine. Save full throttle for later."],
+  warm: ["Warm: full power OK", ""],
+};
+const ETA_MIN_RISE = 0.3 / 60;   // °C per second: slower than this, don't guess an ETA
+
+// How each logger column shows on a tile. null = not shown on its own (feeds a derived value, or
+// isn't useful live). "temp" and "speed" follow the unit toggles. Columns not listed (new catalog
+// values) use the catalog's label and unit.
+const SHOW = {
+  rpm: { label: "Engine speed", unit: "rpm", d: 0 },
+  speed_kph: { label: "Speed", kind: "speed", d: 0 },
+  map_kpa: { label: "Manifold pressure", unit: "kPa", d: 0 },
+  load_pct: { label: "Load", unit: "%", d: 0 },
+  abs_load_pct: { label: "Absolute load", unit: "%", d: 0 },
+  timing_deg: { label: "Timing", unit: "°", d: 1 },
+  stft_pct: { label: "Short-term trim", unit: "%", d: 1 },
+  ltft_pct: { label: "Long-term trim", unit: "%", d: 1 },
+  lambda: { label: "Lambda", unit: "", d: 3 },
+  lambda_cmd: { label: "Commanded lambda", unit: "", d: 3 },
+  rail_kpa: { label: "Fuel rail", unit: "bar", d: 0, scale: 0.01 },
+  pedal_pct: { label: "Pedal", unit: "%", d: 0 },
+  throttle_pct: { label: "Throttle", unit: "%", d: 0 },
+  coolant_c: { label: "Coolant", kind: "temp", d: 0 },
+  oil_c: { label: "Oil", kind: "temp", d: 0 },
+  iat_c: { label: "Intake air", kind: "temp", d: 0 },
+  ambient_c: { label: "Ambient", kind: "temp", d: 0 },
+  cat_temp_c: { label: "Catalyst", kind: "temp", d: 0 },
+  volts: { label: "Voltage", unit: "V", d: 1 },
+  baro_kpa: { label: "Barometric", unit: "kPa", d: 0 },
+  fuel_pct: { label: "Fuel level", unit: "%", d: 0 },
+  o2s2_v: { label: "Rear O2", unit: "V", d: 2 },
+  lt_o2s2_trim_pct: { label: "Rear O2 trim", unit: "%", d: 1 },
+  run_time_s: { label: "Run time", kind: "duration" },
+  boost_act_kpa: null, boost_cmd_kpa: null, o2s1_ma: null, o2s2_trim_pct: null,
+};
+// Values worked out from two columns. They appear right after the "after" column.
+const DERIVED = {
+  boost: { label: "Boost", unit: "psi", d: 1, from: ["boost_act_kpa", "baro_kpa"], after: "boost_act_kpa",
+    calc: (v) => (v.boost_act_kpa - v.baro_kpa) / 6.895 },
+  trim: { label: "Total fuel trim", unit: "%", d: 1, from: ["stft_pct", "ltft_pct"], after: "ltft_pct",
+    calc: (v) => v.stft_pct + v.ltft_pct },
+};
+
+const liveSupported = () => num(app.protocol) && app.protocol >= 2;
+
+// Logger columns the active preset is collecting on this car.
+function collectedColumns() {
+  const s = app.status || {};
+  const id = s.state === "logging" && s.preset ? s.preset.id : app.active;
+  const preset = app.presets.find((p) => p.id === id);
+  if (!preset) return [];
+  return app.catalog
+    .filter((c) => preset.weights[c.id] > 0 && (!app.supported || app.supported.includes(c.id)))
+    .flatMap((c) => c.columns);
+}
+
+// What the picker offers: shown columns plus derived values whose inputs are collected.
+function liveChoices() {
+  const cols = collectedColumns();
+  const have = new Set(cols);
+  const out = [];
+  for (const col of cols) {
+    if (SHOW[col] !== null) out.push(col);
+    for (const [id, d] of Object.entries(DERIVED)) {
+      if (d.after === col && d.from.every((c) => have.has(c))) out.push(id);
+    }
+  }
+  return out;
+}
+
+function liveInfo(id) {
+  if (DERIVED[id]) return DERIVED[id];
+  if (SHOW[id]) return SHOW[id];
+  const c = app.catalog.find((x) => x.columns.includes(id));
+  return { label: c ? c.label : id, unit: c ? c.unit : "", d: 1 };
+}
+
+// {v, age} for a column or derived value from the last reply, ages brought up to now.
+function liveValue(id) {
+  if (!connected() || !app.live || !app.live.values) return null;
+  const since = (performance.now() - app.live.at) / 1000;
+  const get = (col) => {
+    const x = app.live.values[col];
+    return Array.isArray(x) && num(x[0]) ? { v: x[0], age: x[1] + since } : null;
+  };
+  const d = DERIVED[id];
+  if (!d) return get(id);
+  const parts = d.from.map(get);
+  if (parts.some((p) => !p)) return null;
+  return { v: d.calc(Object.fromEntries(d.from.map((c, i) => [c, parts[i].v]))), age: Math.max(...parts.map((p) => p.age)) };
+}
+
+const toF = (c) => c * 9 / 5 + 32;
+const tempUnit = () => (app.units.temp === "F" ? "°F" : "°C");
+const showTemp = (c) => (app.units.temp === "F" ? toF(c) : c);
+
+// A value in the units it's shown in (numbers only; durations stay in seconds).
+function liveConvert(id, v) {
+  const info = liveInfo(id);
+  if (info.kind === "temp") return showTemp(v);
+  if (info.kind === "speed") return app.units.speed === "mph" ? v * 0.621371 : v;
+  return info.scale ? v * info.scale : v;
+}
+
+function liveFormat(id, v) {
+  const info = liveInfo(id);
+  if (info.kind === "duration") return { text: fmtDuration(v), unit: "" };
+  const unit = info.kind === "temp" ? tempUnit() : info.kind === "speed" ? (app.units.speed === "mph" ? "mph" : "km/h") : info.unit;
+  return { text: liveConvert(id, v).toFixed(info.d ?? 1), unit };
+}
+
+// Columns to ask for: what the tiles and the warm-up card need. Missing ones are just absent.
+function liveCols() {
+  const cols = new Set(["coolant_c", "oil_c", "run_time_s"]);
+  for (const id of selectedTiles()) (DERIVED[id] ? DERIVED[id].from : [id]).forEach((c) => cols.add(c));
+  return [...cols];
+}
+
+function selectedTiles() {
+  const chosen = app.liveSel || DEFAULT_TILES;
+  return liveChoices().filter((id) => chosen.includes(id));
+}
+
+function startLive() {
+  stopLive();
+  let inFlight = false;
+  app.liveTimer = setInterval(async () => {
+    if (app.tab !== "live" || document.hidden || !connected() || app.editing || inFlight) return;
+    if (!app.catalog.length || !liveSupported()) return;
+    inFlight = true;                     // a slow reply must not stack up requests behind it
+    try {
+      const msg = await app.link.request("live", { cols: liveCols() });
+      onLive(msg.live || {});
+    } catch (e) {
+      if (/unknown command/i.test(e.message)) { app.protocol = 1; renderLive(); }   // an older Pi
+    } finally { inFlight = false; }
+  }, LIVE_EVERY_MS);
+}
+
+function stopLive() { clearInterval(app.liveTimer); app.liveTimer = null; }
+
+function onLive(live) {
+  app.live = { state: live.state, values: live.values || {}, at: performance.now() };
+  const now = performance.now() / 1000;
+  for (const id of selectedTiles()) {
+    const x = liveValue(id);
+    const h = app.liveHist[id] || (app.liveHist[id] = []);
+    if (x && x.age <= LIVE_STALE_S) h.push([now, x.v]);
+    while (h.length && h[0][0] < now - TREND_S) h.shift();
+  }
+  renderLive();
+}
+
+// ---- rendering ----
+
+function liveHint() {
+  if (!connected()) return "Connect to CarPi to see live values.";
+  if (app.protocol !== null && !liveSupported()) {
+    return "The CarPi software on this Pi is older than this page and doesn't send live values yet. "
+      + "In an SSH session on the Pi: cd ~/carpi && git pull, then sudo systemctl restart carpi-logger carpi-ble";
+  }
+  if (app.live && app.live.state !== "logging") {
+    const s = app.status || {};
+    return `Not reading the car right now (${(STATES[s.state] || STATES.unknown).toLowerCase()}). `
+      + "Values appear once the logger is reading the engine: turn the ignition on.";
+  }
+  return "";
+}
+
+function renderLive() {
+  if (app.tab !== "live") return;
+  const hint = liveHint();
+  $("#live-hint").textContent = hint;
+  $("#live-hint").hidden = !hint;
+  $("#u-temp").textContent = tempUnit();
+  $("#u-speed").textContent = app.units.speed === "mph" ? "mph" : "km/h";
+  renderChips();
+  updateTiles();
+  renderWarmup();
+}
+
+function renderChips() {
+  const choices = liveChoices();
+  const chosen = app.liveSel || DEFAULT_TILES;
+  const key = `${choices.join(",")}|${chosen.join(",")}`;
+  if (key === app.liveChipKey) return;            // rebuilding mid-tap would eat the tap
+  app.liveChipKey = key;
+  $("#live-chips").innerHTML = choices.length
+    ? choices.map((id) => `<button class="vchip" type="button" data-id="${esc(id)}" aria-pressed="${chosen.includes(id)}">${esc(liveInfo(id).label)}</button>`).join("")
+    : `<span class="sub">${connected() && app.presets.length ? "The active preset isn't collecting anything this page can show." : "Values appear here once connected."}</span>`;
+  buildTiles();
+}
+
+function buildTiles() {
+  $("#live-tiles").innerHTML = selectedTiles().map((id) => {
+    const open = app.liveOpen.has(id);
+    return `<button class="ltile${open ? " open" : ""}" type="button" data-id="${esc(id)}" aria-expanded="${open}">
+      <span class="k"><span>${esc(liveInfo(id).label)}</span><span class="age"></span></span>
+      <span class="v"><span class="num">—</span><small class="u"></small></span>
+      <span class="trend"><svg viewBox="0 0 300 70" preserveAspectRatio="none" aria-hidden="true"><polyline points=""/></svg>
+        <span class="mm"><span>last ${TREND_S} s</span><span class="mmv"></span></span></span>
+    </button>`;
+  }).join("");
+  updateTiles();
+}
+
+function updateTiles() {
+  for (const el of document.querySelectorAll("#live-tiles .ltile")) {
+    const id = el.dataset.id;
+    const x = liveValue(id);
+    const numEl = el.querySelector(".num"), unitEl = el.querySelector(".u"), ageEl = el.querySelector(".age");
+    if (!x) {
+      numEl.textContent = "—";
+      unitEl.textContent = "";
+      ageEl.textContent = "";
+      el.classList.add("stale");
+    } else {
+      const f = liveFormat(id, x.v);
+      numEl.textContent = f.text;
+      unitEl.textContent = f.unit;
+      ageEl.textContent = x.age < 9.5 ? `${x.age.toFixed(1)} s` : ago(x.age);
+      el.classList.toggle("stale", x.age > LIVE_STALE_S);
+    }
+    if (el.classList.contains("open")) drawTrend(el, id);
+  }
+}
+
+function drawTrend(el, id) {
+  const h = app.liveHist[id] || [];
+  const line = el.querySelector("polyline"), mm = el.querySelector(".mmv");
+  if (h.length < 2) { line.setAttribute("points", ""); mm.textContent = "collecting…"; return; }
+  const now = performance.now() / 1000;
+  const ys = h.map(([, v]) => liveConvert(id, v));
+  const lo = Math.min(...ys), hi = Math.max(...ys), span = hi - lo || 1;
+  line.setAttribute("points", h.map(([t], i) =>
+    `${((t - (now - TREND_S)) / TREND_S * 300).toFixed(1)},${(66 - (ys[i] - lo) / span * 62).toFixed(1)}`).join(" "));
+  const d = liveInfo(id).kind === "duration" ? 0 : liveInfo(id).d ?? 1;
+  mm.textContent = `min ${lo.toFixed(d)} · max ${hi.toFixed(d)}`;
+}
+
+// Least-squares slope (°C/s) over the last minute of the warm-up reference, or null.
+function warmSlope() {
+  const now = performance.now() / 1000;
+  const pts = app.warmHist.filter(([t]) => t >= now - 60);
+  if (pts.length < 5 || pts[pts.length - 1][0] - pts[0][0] < 20) return null;
+  const mt = pts.reduce((a, [t]) => a + t, 0) / pts.length;
+  const mv = pts.reduce((a, [, v]) => a + v, 0) / pts.length;
+  const num_ = pts.reduce((a, [t, v]) => a + (t - mt) * (v - mv), 0);
+  const den = pts.reduce((a, [t]) => a + (t - mt) ** 2, 0);
+  return den ? num_ / den : null;
+}
+
+function renderWarmup() {
+  const card = $("#warmup");
+  const reading = connected() && app.live && app.live.state === "logging";
+  const oil = reading ? liveValue("oil_c") : null;
+  const cool = reading ? liveValue("coolant_c") : null;
+  const basis = oil ? "oil" : cool ? "coolant" : null;
+  const ref = basis === "oil" ? oil.v : cool ? cool.v : null;
+  const th = WARMUP[basis || "oil"];
+  const deg = (c) => `${showTemp(c).toFixed(0)}<small>${tempUnit()}</small>`;
+  const oilInCatalog = app.catalog.some((c) => c.columns.includes("oil_c"));
+
+  // warm-up history for the ETA: one point per new reply, at most one a second (reset when the
+  // basis changes). Redraws without a new reply add nothing.
+  if (reading && basis && app.live.at !== app.warmAt) {
+    app.warmAt = app.live.at;
+    const t = app.live.at / 1000;
+    if (app.warmBasis !== basis) { app.warmHist = []; app.warmBasis = basis; }
+    const last = app.warmHist[app.warmHist.length - 1];
+    if (!last || t - last[0] >= 1) app.warmHist.push([t, ref]);
+    while (app.warmHist.length && app.warmHist[0][0] < t - 90) app.warmHist.shift();
+  }
+
+  let stage = null, label = "Waiting for the engine", advice = "Readings appear once the logger is reading the car.";
+  if (reading && !basis) {
+    label = "No temperature to go on";
+    advice = "Add coolant temperature to the active preset (Logging tab) to use the warm-up card.";
+  } else if (reading) {
+    stage = ref >= th.warm ? "warm" : ref >= th.warming ? "warming" : "cold";
+    [label, advice] = STAGES[stage];
+  }
+  const st = $("#w-stage");
+  st.className = `stage${stage ? " " + stage : ""}`;
+  st.textContent = label;
+  $("#w-advice").textContent = advice;
+
+  $("#w-oil").innerHTML = oil ? deg(oil.v) : `—<small>&nbsp;${oilInCatalog ? "not collected" : "not set up"}</small>`;
+  $("#w-cool").innerHTML = cool ? deg(cool.v) : "—";
+
+  const slope = stage && stage !== "warm" ? warmSlope() : null;
+  let eta = "—";
+  if (stage === "warm") eta = "now";
+  else if (slope !== null && slope >= ETA_MIN_RISE) {
+    const min = (th.warm - ref) / slope / 60;
+    if (min <= 30) eta = `~${Math.max(1, Math.ceil(min))}<small>min</small>`;
+  }
+  $("#w-eta").innerHTML = eta;
+
+  $("#w-bar").style.width = `${ref === null ? 0 : Math.min(100, Math.max(3, ref / th.warm * 100))}%`;
+  $("#w-m1").textContent = `${showTemp(th.warming).toFixed(0)}°`;
+  $("#w-m2").textContent = `${showTemp(th.warm).toFixed(0)}° ${basis || "oil"}`;
+  const standin = $("#w-standin");
+  standin.hidden = !(reading && basis === "coolant");
+  standin.textContent = `${oilInCatalog ? "Oil temperature isn't in the active preset" : "Oil temperature isn't set up yet"}, `
+    + `so this uses coolant as a stand-in and asks for ${showTemp(WARMUP.coolant.warm).toFixed(0)} ${tempUnit()} `
+    + `instead of ${showTemp(WARMUP.oil.warm).toFixed(0)} ${tempUnit()}, because oil warms more slowly than coolant.`;
+
+  // since start: the engine's own run timer when collected, else the drive's elapsed time
+  const run = reading ? liveValue("run_time_s") : null;
+  const since = run ? run.v + Math.min(run.age, LIVE_STALE_S) : reading && num((app.status || {}).elapsed_s) ? app.status.elapsed_s : null;
+  chip($("#w-chip"), "", since === null ? "—" : `${fmtDuration(since)} since start`);
+
+  const temp = basis ? `${showTemp(ref).toFixed(0)} ${tempUnit()} ${basis}` : "";
+  const etaText = eta.startsWith("~") ? eta.replace(/<small>min<\/small>/, " min") : "";
+  $("#w-summary").textContent = [label, temp, etaText].filter(Boolean).join(" · ");
+
+  const choice = store("carpi.warmup");             // "open" | "closed" | null (automatic)
+  const collapsed = choice ? choice === "closed" : stage === "warm";
+  card.classList.toggle("collapsed", collapsed);
+  $("#w-toggle").setAttribute("aria-expanded", String(!collapsed));
+}
+
+$("#w-toggle").addEventListener("click", () => {
+  store("carpi.warmup", $("#warmup").classList.contains("collapsed") ? "open" : "closed");
+  renderWarmup();
+});
+
+$("#live-chips").addEventListener("click", (e) => {
+  const b = e.target.closest(".vchip");
+  if (!b) return;
+  const chosen = new Set(app.liveSel || DEFAULT_TILES);
+  if (chosen.has(b.dataset.id)) chosen.delete(b.dataset.id); else chosen.add(b.dataset.id);
+  app.liveSel = [...chosen];
+  store("carpi.live", app.liveSel);
+  renderChips();
+});
+
+$("#live-tiles").addEventListener("click", (e) => {
+  const el = e.target.closest(".ltile");
+  if (!el) return;
+  const id = el.dataset.id;
+  if (app.liveOpen.has(id)) app.liveOpen.delete(id); else app.liveOpen.add(id);
+  el.classList.toggle("open", app.liveOpen.has(id));
+  el.setAttribute("aria-expanded", String(app.liveOpen.has(id)));
+  updateTiles();
+});
+
+$("#u-temp").addEventListener("click", () => {
+  app.units.temp = app.units.temp === "F" ? "C" : "F";
+  store("carpi.units", app.units);
+  renderLive();
+});
+
+$("#u-speed").addEventListener("click", () => {
+  app.units.speed = app.units.speed === "mph" ? "kph" : "mph";
+  store("carpi.units", app.units);
+  renderLive();
+});
+
 // ---------- start ----------
 
 $(".tabs").addEventListener("click", (e) => {
   const tab = e.target.closest(".tab");
-  if (tab) showTab(tab.id === "tab-home" ? "home" : "dash");
+  if (tab) showTab(tab.id.slice(4));        // "tab-live" -> "live"
 });
 setInterval(() => { if (!document.hidden) renderLink(); }, 1000);   // "last reply 3 s ago"
 showTab(app.tab);
