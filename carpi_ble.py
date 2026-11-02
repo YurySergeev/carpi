@@ -2,11 +2,13 @@
 """
 carpi_ble.py - Bluetooth LE service that lets the phone pick what the logger records.
 
-Runs next to carpi-logger as its own systemd service. It never touches the CAN bus: all it does
-is read and write small files in ~/carpi (presets, active_preset.json, tag.txt), read the
-logger's /run/carpi/status.json, and read the Pi's own health and can0 counters for the
-dashboard (carpi_system.py, sampled every SAMPLE_EVERY_S). The protocol is in carpi_control.py;
-the phone page is web/config/.
+Runs next to carpi-logger as its own systemd service. It never touches the CAN bus: it reads and
+writes small files in ~/carpi (presets, active_preset.json, tag.txt), reads the logger's
+/run/carpi/status.json and live.json, and reads the Pi's own health and can0 counters for the
+dashboard (carpi_system.py, sampled every SAMPLE_EVERY_S). From the Settings tab it also manages
+Wi-Fi (carpi_net.py, through NetworkManager), shuts down or restarts the Pi and sets its clock
+(carpi_admin.py); pi-setup/install.sh grants exactly those permissions. The protocol is in
+carpi_control.py; the phone page is web/config/.
 
 BlueZ over D-Bus, standard Raspberry Pi OS packages only:
   sudo apt install -y python3-dbus python3-gi
@@ -34,8 +36,10 @@ import dbus.mainloop.glib
 import dbus.service
 from gi.repository import GLib
 
+import carpi_admin
 import carpi_control
 import carpi_mgmt
+import carpi_net
 import carpi_presets
 import carpi_system
 
@@ -235,9 +239,21 @@ class RxCharacteristic(Characteristic):
             reply = self.controller.handle_line(line)
             cmd = _cmd(line)
             label = None
-            if cmd != "status":                       # polled every 2 s: too chatty to log
-                label = f"{cmd} from {device.rsplit('/', 1)[-1]} (mtu {mtu})"
+            if cmd not in ("status", "live"):        # polled every 0.5-2 s: too chatty to log
+                label = f"{cmd} from {device.rsplit('/', 1)[-1]} (mtu {mtu})"   # never the request body
             GLib.idle_add(self.tx.send, reply, mtu, label)   # after WriteValue has returned
+            after = self.controller.take_after()
+            if after is not None:                    # shut down / restart once the reply is out
+                log(f"{cmd}: acting in {carpi_control.POWER_DELAY_S} s")
+                GLib.timeout_add_seconds(carpi_control.POWER_DELAY_S, _run_once, after)
+
+
+def _run_once(action):
+    try:
+        action()
+    except Exception as e:                       # e.g. polkit refused: log it, keep serving
+        log(f"power action failed: {e}")
+    return False                                 # GLib: don't repeat
 
 
 def _cmd(line):
@@ -429,7 +445,8 @@ def main():
     sampler = carpi_system.Sampler(can=args.can, disk=args.home)
     sampler.sample()                       # first reading now; CPU % and frames/s need a second
     GLib.timeout_add_seconds(SAMPLE_EVERY_S, sampler.sample)
-    controller = carpi_control.Controller(store, args.status_file, system=sampler.snapshot)
+    controller = carpi_control.Controller(store, args.status_file, system=sampler.snapshot,
+                                          net=carpi_net.Net(), admin=carpi_admin.Admin())
     app = Application(bus)
     service = Service(bus, 0, carpi_control.SERVICE_UUID)
     tx = TxCharacteristic(bus, 1, service)

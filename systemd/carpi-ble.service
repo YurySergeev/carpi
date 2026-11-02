@@ -1,5 +1,5 @@
 [Unit]
-Description=CarPi Bluetooth config service (phone picks what the logger records)
+Description=CarPi Bluetooth service (phone page: presets, live values, Pi settings)
 After=bluetooth.service
 Wants=bluetooth.service
 
@@ -9,9 +9,11 @@ SupplementaryGroups=bluetooth
 WorkingDirectory=/home/carpi/carpi
 # Bluetooth can come up soft-blocked; "+" runs this one line as root
 ExecStartPre=+/usr/sbin/rfkill unblock bluetooth
-# BlueZ's advertising API is refused on this Pi; carpi_ble.py then advertises through the
-# kernel's Bluetooth management socket, which needs CAP_NET_ADMIN
-AmbientCapabilities=CAP_NET_ADMIN
+# CAP_NET_ADMIN: BlueZ's advertising API is refused on this Pi; carpi_ble.py then advertises
+# through the kernel's Bluetooth management socket, which needs it.
+# CAP_SYS_TIME: the Settings tab sets the clock from the phone when the Pi isn't synced
+# (carpi_admin.py). Wi-Fi and shut down/restart go through polkit instead (pi-setup/50-carpi.rules).
+AmbientCapabilities=CAP_NET_ADMIN CAP_SYS_TIME
 ExecStart=/usr/bin/python3 -u carpi_ble.py
 Restart=always
 RestartSec=5

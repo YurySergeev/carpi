@@ -1,0 +1,9 @@
+[Unit]
+Description=Save the time for the next boot (the Pi has no battery-backed clock)
+# systemd-timesyncd sets the clock from this file's modification time at boot. It only updates
+# it after an internet sync, so without this a power cut restarts the clock from the last sync,
+# possibly hours or days earlier. Touched every minute by carpi-clock-save.timer.
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/touch /var/lib/systemd/timesync/clock

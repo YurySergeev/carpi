@@ -9,8 +9,8 @@
   <meta name="robots" content="noindex">
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="manifest" href="manifest.webmanifest">
-  <link rel="stylesheet" href="config.css?v=4">
-  <script src="config.js?v=4" defer></script>
+  <link rel="stylesheet" href="config.css?v=5">
+  <script src="config.js?v=5" defer></script>
 </head>
 <body>
   <div class="page">
@@ -35,6 +35,7 @@
       <button class="tab" type="button" role="tab" id="tab-dash" aria-controls="dash" aria-selected="true">Dashboard</button>
       <button class="tab" type="button" role="tab" id="tab-live" aria-controls="live" aria-selected="false">Live</button>
       <button class="tab" type="button" role="tab" id="tab-home" aria-controls="home" aria-selected="false">Logging</button>
+      <button class="tab" type="button" role="tab" id="tab-settings" aria-controls="settings" aria-selected="false">Settings</button>
     </nav>
 
     <main id="dash" role="tabpanel" aria-labelledby="tab-dash">
@@ -123,6 +124,62 @@
           <button class="btn" id="new-preset" type="button" disabled>+ New</button>
         </div>
         <ul class="presets" id="presets"></ul>
+      </section>
+    </main>
+
+    <main id="settings" role="tabpanel" aria-labelledby="tab-settings" hidden>
+      <p class="notice" id="settings-hint" hidden></p>
+
+      <section class="card" id="wifi-card" aria-live="polite">
+        <div class="card-head"><h2>Wi-Fi</h2><span class="chip" id="wifi-chip">—</span></div>
+        <p class="state" id="wifi-line">—</p>
+        <p class="sub" id="wifi-sub"></p>
+        <h3 class="list-head">Saved networks <span class="sub">(tried in this order)</span></h3>
+        <ul class="nets" id="nets"></ul>
+        <div class="row end"><button class="btn" id="net-add-open" type="button">+ Add network</button></div>
+
+        <div class="addnet" id="addnet" hidden>
+          <div class="section-head">
+            <h3>Add a network</h3>
+            <button class="btn ghost small" id="net-rescan" type="button">Scan again</button>
+          </div>
+          <ul class="nearby" id="nearby"></ul>
+          <button class="link" id="net-other" type="button">Other network (hidden or not listed)…</button>
+          <form id="net-form" autocomplete="off" hidden>
+            <label class="field" for="net-ssid">Network name</label>
+            <input id="net-ssid" maxlength="32" autocapitalize="none" spellcheck="false">
+            <label class="field" for="net-pass">Password <span class="sub">(leave empty for an open network)</span></label>
+            <div class="row">
+              <input id="net-pass" type="password" autocomplete="new-password" maxlength="63" spellcheck="false">
+              <button class="btn small" id="net-show" type="button" aria-pressed="false">Show</button>
+            </div>
+            <p class="formerr" id="net-err" role="alert" hidden></p>
+            <div class="row end">
+              <button class="btn ghost" id="net-cancel" type="button">Cancel</button>
+              <button class="btn" type="submit" value="save">Save</button>
+              <button class="btn primary" type="submit" value="connect">Save &amp; connect</button>
+            </div>
+          </form>
+        </div>
+        <p class="hint">Changing networks can drop an SSH session. Bluetooth isn't affected, so this page keeps working.</p>
+      </section>
+
+      <section class="card" id="pi-info-card">
+        <div class="card-head"><h2>This Pi</h2><span class="chip" id="clock-chip">—</span></div>
+        <dl class="kv" id="pi-kv"></dl>
+        <div class="row wrap">
+          <button class="btn small" id="ssh-copy" type="button">Copy SSH command</button>
+          <button class="btn small" id="clock-sync" type="button">Sync clock from phone</button>
+        </div>
+      </section>
+
+      <section class="card" id="power-card">
+        <h2>Power</h2>
+        <p class="sub">Tap Shut down before turning the car off: the Pi closes its files and powers off cleanly instead of losing power mid-write.</p>
+        <div class="row">
+          <button class="btn" id="pi-restart" type="button">Restart</button>
+          <button class="btn danger" id="pi-shutdown" type="button">Shut down</button>
+        </div>
       </section>
     </main>
 

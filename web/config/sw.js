@@ -1,6 +1,6 @@
 // Offline copy of the config page: network first (so updates arrive), cache when there's no signal.
-const CACHE = "carpi-config-v4";   // bump with the ?v= in index.html
-const FILES = ["./", "index.html", "config.css?v=4", "config.js?v=4", "manifest.webmanifest", "icon.svg"];
+const CACHE = "carpi-config-v5";   // bump with the ?v= in index.html
+const FILES = ["./", "index.html", "config.css?v=5", "config.js?v=5", "manifest.webmanifest", "icon.svg"];
 
 self.addEventListener("install", (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(FILES)).then(() => self.skipWaiting()));

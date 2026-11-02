@@ -12,7 +12,7 @@ With the default preset, which matches every drive logged before presets existed
 | --- | --- | --- | --- | --- |
 | `time` | — | Pi wall clock | ISO 8601 | every row |
 | `elapsed_s` | — | monotonic seconds since the drive started | s | every row |
-| `clock_ok` | — | 1 once NTP has synced the clock | 0/1 | every row |
+| `clock_ok` | — | 1 once the clock can be trusted: synced over the internet, or set from the phone page | 0/1 | every row |
 | `rpm` | 0x0C | (256A+B)/4 | rpm | fast |
 | `map_kpa` | 0x0B | A | kPa abs | fast |
 | `boost_act_kpa` | 0x70 | (256D+E)/32, multi-frame | kPa abs | fast |
@@ -53,6 +53,8 @@ Written when the drive starts:
 - `follows`: only on a file started by a mid-drive preset change. It names the file before it (`2026-10-06/drive-171502.csv`).
 
 Refreshed every 30 s: `rows`, `duration_s`, `complete`. `"complete": false` means power was cut before the drive ended cleanly.
+
+Written once if the clock becomes trustworthy mid-drive (the phone set it, or NTP synced): `start_corrected`, the drive's real start time. The file name keeps the original, possibly wrong, time.
 
 Written at a clean end: `end`, and `ended_by`. `ended_by` is `engine_off` (normal), `preset_change` (a new file follows), or `stopped` (the service was stopped).
 

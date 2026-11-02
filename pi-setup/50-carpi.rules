@@ -1,0 +1,19 @@
+// CarPi: let the Bluetooth service (user carpi) manage Wi-Fi and power from the phone page's
+// Settings tab, without a password. Exactly these actions; everything else falls through to
+// the normal rules. (carpi can already do all of this with sudo when logged in; this only lets
+// the background service do it.) Installed by pi-setup/install.sh, removed by uninstall.sh.
+polkit.addRule(function (action, subject) {
+  if (subject.user !== "carpi") {
+    return polkit.Result.NOT_HANDLED;
+  }
+  var allowed = [
+    "org.freedesktop.NetworkManager.settings.modify.system",   // add, change, forget networks
+    "org.freedesktop.NetworkManager.network-control",          // connect to a network
+    "org.freedesktop.NetworkManager.wifi.scan",                // scan for nearby networks
+    "org.freedesktop.login1.power-off",                        // shut down
+    "org.freedesktop.login1.power-off-multiple-sessions",      // ...also while someone is on SSH
+    "org.freedesktop.login1.reboot",                           // restart
+    "org.freedesktop.login1.reboot-multiple-sessions"
+  ];
+  return allowed.indexOf(action.id) >= 0 ? polkit.Result.YES : polkit.Result.NOT_HANDLED;
+});

@@ -1,5 +1,6 @@
 """The logger against a simulated engine ECU on a python-can virtual bus."""
 import csv
+from datetime import datetime
 import json
 import threading
 import time
@@ -217,3 +218,33 @@ def test_unwritable_live_file_never_stops_logging(rig):
     _finish(rig)
     [(_, rows, meta)] = _drives(rig)
     assert meta["complete"] and len(rows) >= 20
+
+
+def test_clock_set_from_the_phone_mid_drive(rig, monkeypatch):
+    marker = rig.tmp / "clock_from_phone"
+    monkeypatch.setattr(cl, "CLOCK_SYNCED", rig.tmp / "never-synced")
+    monkeypatch.setattr(cl, "PHONE_CLOCK", marker)
+    rig.logger.start()
+    assert _wait(lambda: _status(rig).get("rows", 0) >= 15)
+    marker.write_text("1793000000\n")                     # the phone just set the clock
+    assert _wait(lambda: _status(rig).get("rows", 0) >= 40)
+    _finish(rig)
+    [(_, rows, meta)] = _drives(rig)
+    flags = [int(r["clock_ok"]) for r in rows]
+    assert flags[0] == 0 and flags[-1] == 1
+    assert flags == sorted(flags)                         # 0 until the marker, then 1
+    start = datetime.fromisoformat(meta["start"])
+    corrected = datetime.fromisoformat(meta["start_corrected"])
+    assert abs((corrected - start).total_seconds()) < 5   # same clock here, so nearly equal
+
+
+def test_no_start_correction_when_the_clock_was_good_all_along(rig, monkeypatch):
+    synced = rig.tmp / "synchronized"
+    synced.write_text("")
+    monkeypatch.setattr(cl, "CLOCK_SYNCED", synced)
+    monkeypatch.setattr(cl, "PHONE_CLOCK", rig.tmp / "no-marker")
+    rig.logger.start()
+    assert _wait(lambda: _status(rig).get("rows", 0) >= 15)
+    _finish(rig)
+    [(_, rows, meta)] = _drives(rig)
+    assert all(r["clock_ok"] == "1" for r in rows) and "start_corrected" not in meta

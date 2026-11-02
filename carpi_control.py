@@ -29,14 +29,28 @@ Requests:  {"rid": 7, "cmd": "<name>", ...}       Replies: {"rid": 7, "ok": true
   delete   id
   activate id              the logger picks it up within a second (mid-drive: new file)
   tag      tag             one word for ~/carpi/tag.txt ("" clears it)
+
+Settings (protocol 3; carpi_net.py and carpi_admin.py, allowed by pi-setup/50-carpi.rules):
+  net                      Wi-Fi state, saved networks in priority order, addresses, hostname
+  net_scan  rescan (bool)  nearby networks, strongest first (rescan starts a fresh scan; the
+                           phone asks again a few seconds later for the results)
+  net_add   ssid, password, connect   save a network at the lowest priority (password "" =
+                           open). The password goes only to NetworkManager: never into a reply.
+  net_forget uuid  /  net_priority order (uuids, most preferred first)  /  net_connect uuid
+  power     action         "shutdown" | "reboot": replies first, acts POWER_DELAY_S later
+  clock     now_ms         the phone's time; used only if the Pi isn't synced and is behind
+  hello and state also report clock: {synced, source}.
 """
 import json
 import time
 from pathlib import Path
 
+import carpi_net
 import carpi_presets as presets
 
-PROTOCOL = 2            # 2: the "live" request
+PROTOCOL = 3            # 2: the "live" request; 3: Wi-Fi, power and clock settings
+POWER_DELAY_S = 2       # shut down / restart this long after replying, so the reply gets out
+UNAVAILABLE = "not available on this Pi: update CarPi (git pull) and run  sudo ~/carpi/pi-setup/install.sh"
 SERVICE_UUID = "6c2a0001-4f3b-4d1e-9a57-3c8e2b7d5f10"
 RX_UUID = "6c2a0002-4f3b-4d1e-9a57-3c8e2b7d5f10"      # phone writes requests here
 TX_UUID = "6c2a0003-4f3b-4d1e-9a57-3c8e2b7d5f10"      # Pi notifies replies here
@@ -83,16 +97,31 @@ def catalog():
 
 
 class Controller:
-    def __init__(self, store, status_path, system=None, live_path=None):
+    def __init__(self, store, status_path, system=None, live_path=None, net=None, admin=None):
         """system: a callable returning {"system": {...}, "obd": {...}} (carpi_system.Sampler
         .snapshot), or None where there's no Pi to read (tests). live_path defaults to
-        live.json next to the status file."""
+        live.json next to the status file. net / admin: carpi_net.Net and carpi_admin.Admin, or
+        None where settings aren't available."""
         self.store = store
         self.status_path = Path(status_path) if status_path else None
         self.system = system
         if live_path is None and self.status_path is not None:
             live_path = self.status_path.with_name("live.json")
         self.live_path = Path(live_path) if live_path else None
+        self.net = net
+        self.admin = admin
+        self._after = None
+
+    def take_after(self):
+        """An action to run once the reply has been sent (shut down / restart), handed out once."""
+        after, self._after = self._after, None
+        return after
+
+    @staticmethod
+    def _need(backend):
+        if backend is None:
+            raise presets.PresetError(UNAVAILABLE)
+        return backend
 
     def live_values(self, cols=None):
         """The logger's latest readings, with each value's age brought up to now."""
@@ -131,8 +160,12 @@ class Controller:
         return out
 
     def state(self):
-        return dict(self.live(), presets=self.store.presets(), active=self.store.active_id(),
-                    tag=self.store.tag(), supported=self.store.supported())
+        out = dict(self.live(), presets=self.store.presets(), active=self.store.active_id(),
+                   tag=self.store.tag(), supported=self.store.supported())
+        if self.admin is not None:
+            clock = self.admin.clock_status()
+            out["clock"] = {"synced": clock["synced"], "source": clock["source"]}
+        return out
 
     def handle(self, msg):
         if not isinstance(msg, dict):
@@ -161,20 +194,49 @@ class Controller:
         if cmd == "tag":
             self.store.set_tag(msg.get("tag", ""))
             return self.state()
+        if cmd in ("net", "net_scan", "net_add", "net_forget", "net_priority", "net_connect"):
+            return self._network(cmd, msg, self._need(self.net))
+        if cmd == "clock":
+            return {"clock": self._need(self.admin).set_clock(msg.get("now_ms"))}
+        if cmd == "power":
+            action = msg.get("action")
+            self._after = self._need(self.admin).power(action)      # raises for anything unknown
+            return {"power": action, "in_s": POWER_DELAY_S}
         raise presets.PresetError(f"unknown command {cmd!r}")
+
+    @staticmethod
+    def _network(cmd, msg, net):
+        if cmd == "net_scan":
+            return {"nearby": net.scan(bool(msg.get("rescan", True)))}
+        if cmd == "net_add":
+            carpi_net.validate(msg.get("ssid"), msg.get("password", ""))     # checked here too, before any backend
+            added = net.add(msg.get("ssid"), msg.get("password", ""), bool(msg.get("connect")))
+            return dict(net.state(), **added)
+        if cmd == "net_forget":
+            net.forget(msg.get("uuid"))
+        elif cmd == "net_priority":
+            if not isinstance(msg.get("order"), list):
+                raise carpi_net.NetError("order: a list of network ids, most preferred first")
+            net.set_order(msg["order"])
+        elif cmd == "net_connect":
+            net.connect(msg.get("uuid"))
+            return dict(net.state(), connecting=True)
+        return net.state()
 
     def handle_line(self, line):
         """One request line in, one encoded reply line out. Never raises."""
         rid = None
         try:
             msg = json.loads(line)
-            rid = msg.get("rid") if isinstance(msg, dict) else None
-            reply = dict(self.handle(msg), ok=True)
-        except presets.PresetError as e:
-            reply = {"ok": False, "error": str(e)}
         except ValueError:
             reply = {"ok": False, "error": "bad JSON"}
-        except OSError as e:
-            reply = {"ok": False, "error": f"Pi storage error: {e.strerror or e}"}
+        else:
+            rid = msg.get("rid") if isinstance(msg, dict) else None
+            try:
+                reply = dict(self.handle(msg), ok=True)
+            except (presets.PresetError, carpi_net.NetError, ValueError) as e:
+                reply = {"ok": False, "error": str(e)}
+            except OSError as e:
+                reply = {"ok": False, "error": f"Pi storage error: {e.strerror or e}"}
         reply["rid"] = rid
         return (json.dumps(reply, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")

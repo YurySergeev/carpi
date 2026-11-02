@@ -23,10 +23,11 @@ It took two tries. In July, a passive `candump` on the OBD port showed exactly o
 - **Logs automatically.** It detects when the engine starts, opens a new CSV, and closes it when the ignition goes off. Nothing to start by hand.
 - **Won't drain the battery.** It never transmits while the car's bus is asleep.
 - **Survives power cuts.** The car's USB port dies instantly at ignition-off; `fsync` every 5 s and atomic metadata writes mean at most a few seconds are lost.
-- **Lets the phone choose what to log.** Over Bluetooth LE, a small web app picks a preset: which values to read and how often, as a weight per value. Changing presets mid-drive closes the file and starts a new one. The same page shows chosen values live, with a warm-up card for cold starts. [docs/phone-config.md](docs/phone-config.md)
+- **Lets the phone choose what to log.** Over Bluetooth LE, a small web app picks a preset: which values to read and how often, as a weight per value. Changing presets mid-drive closes the file and starts a new one. The same page shows chosen values live, with a warm-up card for cold starts, and has a Settings tab for the Pi's Wi-Fi, a clean shutdown and its clock. [docs/phone-config.md](docs/phone-config.md)
 - **Runs as systemd services.** The logger depends on nothing but `python-can`.
+- **Turns logs into answers** on a PC: per-drive HTML reports with before/after comparison by tag, an interactive analyzer app, and the public [drive viewer](https://yurysergeev.github.io/carpi/).
 
-How the polling, ISO-TP and state machine work: [docs/how-it-works.md](docs/how-it-works.md)
+How the polling, ISO-TP, presets and state machine work: [docs/how-it-works.md](docs/how-it-works.md)
 
 ## Hardware
 
@@ -86,6 +87,13 @@ sudo systemctl start carpi-logger
 
 Columns, decoding formulas and metadata: [docs/data-format.md](docs/data-format.md). The published drives are in [`data/`](data) if you want to poke at real numbers.
 
+On a PC, with the logs copied over:
+
+```bash
+python analyze_drives.py logs --open   # HTML report per drive + index with compare-by-tag (pandas, matplotlib)
+python -m carpi_app                    # interactive analyzer at http://127.0.0.1:8050 (see carpi_app/README.md)
+```
+
 To publish a drive to the [viewer](https://yurysergeev.github.io/carpi/), copy it into `data/` with its day folder (`data/2026-09-26/drive-231349.csv`, since file names repeat across days), add an entry to [`data/drives.toml`](data/drives.toml) with `file = "2026-09-26/drive-231349.csv"`, and push. A GitHub Action tests the analysis, builds the page and deploys it. For a quick summary in the terminal: `python analysis/carpi_analysis.py <drive.csv>`.
 
 ## First results
@@ -96,10 +104,27 @@ One real finding: **total fuel trim is +8.6% at idle but under 1% while driving.
 
 Full report: [docs/baseline-2026-09-25.md](docs/baseline-2026-09-25.md)
 
+## What's in this repo
+
+| Path | What |
+| --- | --- |
+| `carpi_logger.py`, `carpi_presets.py` | The logger on the Pi, and the presets that choose what it reads |
+| `carpi_ble.py`, `carpi_control.py`, `carpi_system.py`, `carpi_mgmt.py` | Bluetooth service for the phone page, its protocol, and the Pi/CAN readings it reports |
+| `carpi_net.py`, `carpi_admin.py`, `pi-setup/` | The Settings tab: Wi-Fi through NetworkManager, shut down/restart and the clock, and the one-time permission setup (`sudo ~/carpi/pi-setup/install.sh`) |
+| `web/config/` | The phone page (Dashboard, Live, Logging), served at [yurysergeev.github.io/carpi/config/](https://yurysergeev.github.io/carpi/config/) |
+| `systemd/` | `can0`, `carpi-logger` and `carpi-ble` services |
+| `probe_addressing.py`, `probe_oil.py` | One-off probes: what the car supports, and the oil-temperature check |
+| `analyze_drives.py` | Per-drive HTML reports and compare-by-tag, on a PC |
+| `carpi_app/`, `deploy/` | The analyzer app, and publishing it to Render |
+| `analysis/`, `web/`, `data/` | The public drive viewer: analysis, page, and the published drives |
+| `tests/` | Logger, presets, Bluetooth protocol and UDS tests (`python -m pytest tests -q`; run on every push) |
+| `docs/` | How it works, data format, phone page, the baseline report |
+| `CarPi_HANDOFF.md` | Current state and backlog, for picking the project up in a new session |
+
 ## Roadmap
 
 - [ ] Clean shutdown on ignition-off (UPS HAT or ignition-sense power)
-- [ ] Drive-summary script: per-drive report and before/after comparison by tag
+- [x] Drive-summary script: per-drive report and before/after comparison by tag (`analyze_drives.py`)
 - [ ] Full-throttle baseline pulls before the tune
 - [ ] VW-specific data over UDS: per-cylinder knock retard, oil temperature, DSG temperature
 - [x] Choose what to log per drive from the phone (Bluetooth LE)
@@ -108,7 +133,7 @@ Full report: [docs/baseline-2026-09-25.md](docs/baseline-2026-09-25.md)
 
 ## A note on safety
 
-CarPi only sends standard, read-only OBD-II Mode 01 requests, the same ones any scan tool sends. It never writes to the car. Don't fiddle with it while driving.
+CarPi only reads. The logger sends standard OBD-II Mode 01 requests, the same ones any scan tool sends. The one-time oil check (`probe_oil.py`) adds a single UDS ReadDataByIdentifier (`0x22`) request, which can't change anything either. Nothing ever writes to the car, changes its diagnostic session or unlocks anything. Don't fiddle with it while driving.
 
 ## License
 

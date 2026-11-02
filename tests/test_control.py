@@ -115,9 +115,9 @@ def _write_live(path, age_of_file=0.0, **values):
                                 "values": {k: list(v) for k, v in values.items()}}))
 
 
-def test_protocol_is_2_for_the_live_tab(tmp_path):
-    assert cc.PROTOCOL == 2
-    assert _ask(_ctl(tmp_path), rid=1, cmd="hello")["protocol"] == 2
+def test_protocol_has_the_live_tab(tmp_path):
+    assert cc.PROTOCOL >= 2                      # 2 added "live"
+    assert _ask(_ctl(tmp_path), rid=1, cmd="hello")["protocol"] == cc.PROTOCOL
 
 
 def test_live_filters_columns_and_ages_values(tmp_path):
@@ -162,3 +162,128 @@ def test_live_reply_is_small(tmp_path):
     _write_live(tmp_path / "live.json", **{c: (1234.567, 0.13) for c in cols})
     out = _ctl(tmp_path).handle_line(json.dumps({"rid": 1, "cmd": "live", "cols": cols}))
     assert len(out) < 600          # 3 notifications at most, even at a small MTU
+
+
+# ---------- settings: Wi-Fi, power, clock (protocol 3) ----------
+
+import carpi_net  # noqa: E402
+
+PASSWORD = "hunter22"
+HOME = "11111111-2222-3333-4444-555555555555"
+
+
+class FakeNet:
+    def __init__(self):
+        self.calls = []
+
+    def state(self):
+        return {"wifi": {"state": "connected", "ssid": "HomeNet", "signal": 72, "ip": "192.168.1.40"},
+                "saved": [{"uuid": HOME, "name": "HomeNet", "ssid": "HomeNet", "priority": 10, "active": True}],
+                "addresses": {"wlan0": ["192.168.1.40"]}, "hostname": "carpi"}
+
+    def scan(self, rescan=True):
+        self.calls.append(("scan", rescan))
+        return [{"ssid": "Cafe Guest", "signal": 40, "secured": False, "saved": False}]
+
+    def add(self, ssid, password, connect=False):
+        self.calls.append(("add", ssid, connect))       # the password is deliberately not recorded
+        if ssid == "HomeNet":
+            raise carpi_net.NetError('"HomeNet" is already saved. Forget it first to change its password.')
+        return {"added": ssid, "connecting": connect}
+
+    def forget(self, uuid):
+        self.calls.append(("forget", uuid))
+
+    def set_order(self, uuids):
+        self.calls.append(("order", list(uuids)))
+
+    def connect(self, uuid):
+        self.calls.append(("connect", uuid))
+
+
+class FakeAdmin:
+    def __init__(self):
+        self.ran = []
+
+    def clock_status(self):
+        return {"synced": False, "source": "none", "pi_time_ms": 1}
+
+    def set_clock(self, now_ms):
+        return {"synced": False, "source": "phone", "pi_time_ms": now_ms, "set": True, "reason": "set from the phone"}
+
+    def power(self, action):
+        if action not in ("shutdown", "reboot"):
+            raise ValueError('power: "shutdown" or "reboot"')
+        return lambda: self.ran.append(action)
+
+
+def _settings_ctl(tmp_path):
+    net, admin = FakeNet(), FakeAdmin()
+    return cc.Controller(cp.Store(tmp_path), tmp_path / "status.json", net=net, admin=admin), net, admin
+
+
+def test_protocol_3_and_clock_in_hello(tmp_path):
+    ctl, _, _ = _settings_ctl(tmp_path)
+    h = _ask(ctl, rid=1, cmd="hello")
+    assert cc.PROTOCOL == 3 and h["protocol"] == 3
+    assert h["clock"] == {"synced": False, "source": "none"}
+    assert _ask(ctl, rid=2, cmd="state")["clock"]["source"] == "none"
+
+
+def test_net_requests(tmp_path):
+    ctl, net, _ = _settings_ctl(tmp_path)
+    assert _ask(ctl, rid=1, cmd="net")["wifi"]["ssid"] == "HomeNet"
+    assert _ask(ctl, rid=2, cmd="net_scan", rescan=False)["nearby"][0]["ssid"] == "Cafe Guest"
+    r = _ask(ctl, rid=3, cmd="net_add", ssid="Cafe Guest", password="", connect=True)
+    assert r["ok"] and r["added"] == "Cafe Guest" and r["connecting"] and r["saved"]   # state comes back too
+    assert _ask(ctl, rid=4, cmd="net_priority", order=[HOME])["ok"]
+    assert _ask(ctl, rid=5, cmd="net_connect", uuid=HOME)["wifi"]["ssid"] == "HomeNet"
+    assert _ask(ctl, rid=6, cmd="net_forget", uuid=HOME)["ok"]
+    assert net.calls == [("scan", False), ("add", "Cafe Guest", True), ("order", [HOME]),
+                         ("connect", HOME), ("forget", HOME)]
+
+
+def test_net_add_reply_never_contains_the_password(tmp_path):
+    ctl, _, _ = _settings_ctl(tmp_path)
+    out = ctl.handle_line(json.dumps({"rid": 1, "cmd": "net_add", "ssid": "Cafe WPA", "password": PASSWORD}))
+    assert PASSWORD.encode() not in out and json.loads(out)["ok"]
+
+
+def test_net_errors_are_replies(tmp_path):
+    ctl, _, _ = _settings_ctl(tmp_path)
+    r = _ask(ctl, rid=1, cmd="net_add", ssid="HomeNet", password=PASSWORD)
+    assert not r["ok"] and "already saved" in r["error"] and PASSWORD not in json.dumps(r)
+    assert not _ask(ctl, rid=2, cmd="net_priority", order="not a list")["ok"]
+    assert not _ask(ctl, rid=3, cmd="net_add", ssid=5, password=None)["ok"]
+
+
+def test_power_runs_only_after_the_reply(tmp_path):
+    ctl, _, admin = _settings_ctl(tmp_path)
+    r = _ask(ctl, rid=1, cmd="power", action="shutdown")
+    assert r == {"ok": True, "power": "shutdown", "in_s": 2, "rid": 1}
+    assert admin.ran == []                       # nothing happens while the reply is being sent
+    after = ctl.take_after()
+    assert ctl.take_after() is None              # handed out once
+    after()
+    assert admin.ran == ["shutdown"]
+    assert not _ask(ctl, rid=2, cmd="power", action="format")["ok"] and ctl.take_after() is None
+
+
+def test_clock_request(tmp_path):
+    ctl, _, _ = _settings_ctl(tmp_path)
+    r = _ask(ctl, rid=1, cmd="clock", now_ms=1_793_000_600_000)
+    assert r["clock"]["set"] and r["clock"]["source"] == "phone"
+
+
+def test_settings_unavailable_without_backends(tmp_path):
+    ctl = _ctl(tmp_path)
+    for cmd in ("net", "net_scan", "power", "clock"):
+        r = _ask(ctl, rid=1, cmd=cmd, action="reboot", now_ms=1)
+        assert not r["ok"] and "not available" in r["error"]
+    assert "clock" not in _ask(ctl, rid=2, cmd="hello")
+
+
+def test_settings_replies_stay_small(tmp_path):
+    ctl, _, _ = _settings_ctl(tmp_path)
+    for msg in ({"cmd": "net"}, {"cmd": "net_scan"}, {"cmd": "hello"}):
+        assert len(ctl.handle_line(json.dumps(dict(msg, rid=1)))) < 4096

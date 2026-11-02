@@ -43,7 +43,7 @@ import json
 import os
 import signal
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import can
@@ -62,6 +62,7 @@ QUIET_RESET = 10.0      # this many seconds of bus silence = car asleep -> re-ar
 FSYNC_EVERY = 5.0
 META_EVERY = 30.0      # refresh the .json so a power cut loses at most this much metadata
 CLOCK_SYNCED = Path("/run/systemd/timesync/synchronized")  # exists once NTP has set the clock
+PHONE_CLOCK = Path("/run/carpi/clock_from_phone")          # carpi_admin.py: the phone set the clock
 STATUS_EVERY = 15.0
 PRESET_CHECK_EVERY = 1.0
 STATUS_FILE_EVERY = 2.0
@@ -105,6 +106,11 @@ PIDS = {
            ("boost_act_kpa", lambda d: u16(d, 3) / 32 if d[0] & 0x02 else None)],
 }
 assert {f"{p:02X}" for p in PIDS} == set(carpi_presets.CATALOG), "PIDS and CATALOG disagree"
+
+
+def clock_ok():
+    """1 once the wall clock can be trusted: synced over the internet, or set from the phone."""
+    return int(CLOCK_SYNCED.exists() or PHONE_CLOCK.exists())
 
 
 def log(msg):
@@ -394,6 +400,7 @@ def log_drive(engine, args, status, follows=None, live=None):
     last_reply = last_sync = last_status = last_meta = last_check = last_live = t0
     latest = {}
     seen_at = {}         # column -> when it was last read (monotonic), for the live snapshot
+    prev_ok = None       # clock_ok on the previous row
     status.update(force=True, state="logging", drive=name, rows=0, elapsed_s=0,
                   preset=meta["preset"], rows_per_s=None)
     with open(csv_path, "x", newline="", buffering=1) as f:   # "x": never truncate an existing file
@@ -418,7 +425,12 @@ def log_drive(engine, args, status, follows=None, live=None):
                 if row:
                     row["time"] = datetime.now().isoformat(timespec="milliseconds")
                     row["elapsed_s"] = round(now - t0, 3)
-                    row["clock_ok"] = int(CLOCK_SYNCED.exists())
+                    row["clock_ok"] = ok = clock_ok()
+                    if prev_ok == 0 and ok and "start_corrected" not in meta:
+                        # the clock just became trustworthy: record when this drive really started
+                        meta["start_corrected"] = (datetime.now() - timedelta(seconds=now - t0)).isoformat(timespec="seconds")
+                        write_meta(meta_path, meta)
+                    prev_ok = ok
                     writer.writerow(row)
                     rows += 1
                     last_reply = now

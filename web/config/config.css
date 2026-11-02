@@ -79,7 +79,7 @@ h2 { font-size: 1.05rem; }
 .row { display: flex; gap: 0.5rem; }
 .row.end { justify-content: flex-end; }
 
-input:not([type]), input[type="text"] {
+input:not([type]), input[type="text"], input[type="password"] {
   flex: 1;
   min-width: 0;
   width: 100%;
@@ -190,7 +190,7 @@ dialog p { margin: 0 0 1rem; color: var(--head); }
 /* ---------- tabs ---------- */
 .tabs {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: 0.25rem;
   padding: 0.25rem;
   margin: 0 0 1.25rem;
@@ -313,3 +313,28 @@ dialog p { margin: 0 0 1rem; color: var(--head); }
 .trend polyline { fill: none; stroke: var(--accent); stroke-width: 1.6; vector-effect: non-scaling-stroke; }
 .trend .mm { display: flex; justify-content: space-between; font-family: var(--mono); font-size: 0.68rem; }
 @media (prefers-reduced-motion: reduce) { .chev, .wbar > i { transition: none; } }
+
+/* ---------- settings ---------- */
+@media (max-width: 400px) { .tab { font-size: 0.82rem; } }
+.list-head { margin: 1rem 0 0.4rem; font-size: 0.9rem; color: var(--head); }
+.list-head .sub { display: inline; font-weight: 400; }
+.nets, .nearby { list-style: none; margin: 0 0 0.75rem; padding: 0; display: grid; gap: 0.4rem; }
+.net { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; flex-wrap: wrap;
+  border: 1px solid var(--line); border-radius: 10px; padding: 0.5rem 0.6rem; background: var(--card); }
+.net.active { border-color: color-mix(in srgb, var(--pass) 45%, var(--line)); }
+.net .name { color: var(--head); font-weight: 600; overflow-wrap: anywhere; }
+.net .meta { font-family: var(--mono); font-size: 0.72rem; }
+.net-actions { display: flex; gap: 0.3rem; flex-wrap: wrap; }
+.net-actions .btn { min-height: 2.25rem; padding: 0.3rem 0.6rem; font-size: 0.82rem; }
+.net-actions .btn.arrow { min-width: 2.25rem; padding: 0.3rem; }
+.nearby button { width: 100%; display: flex; justify-content: space-between; align-items: center; gap: 0.5rem;
+  font: inherit; color: var(--head); background: transparent; border: 1px solid var(--line); border-radius: 10px;
+  padding: 0.55rem 0.7rem; min-height: 2.75rem; cursor: pointer; text-align: left; }
+.nearby button:hover { background: var(--card-hi); }
+.nearby .sig { font-family: var(--mono); font-size: 0.72rem; color: var(--text); white-space: nowrap; }
+.addnet { border-top: 1px solid var(--line); margin-top: 0.75rem; padding-top: 0.75rem; }
+.addnet h3 { margin: 0; font-size: 0.95rem; color: var(--head); }
+#net-form { margin-top: 0.75rem; }
+#net-form input { margin-bottom: 0.6rem; }
+.formerr { color: var(--warn); font-size: 0.85rem; margin: 0 0 0.6rem; }
+.row.wrap { flex-wrap: wrap; margin-top: 0.75rem; }

@@ -292,17 +292,90 @@ class DemoLink {
   state() {
     const presets = this.builtin.map((p) => ({ ...p, builtin: true }))
       .concat([...this.user].sort((a, b) => a.name.localeCompare(b.name)).map((p) => ({ ...p, builtin: false })));
-    return { ...this.live(), presets, active: this.active, tag: this.tag, supported: this.supported };
+    return { ...this.live(), presets, active: this.active, tag: this.tag, supported: this.supported,
+      clock: { synced: false, source: this.clockSource || "none" } };
+  }
+
+  // ---- settings: same shapes as carpi_net.py / carpi_admin.py (made-up network names) ----
+  get nets() {
+    if (!this._nets) {
+      this._nets = [
+        { uuid: "11111111-2222-3333-4444-555555555555", name: "HomeNet", ssid: "HomeNet", priority: 10 },
+        { uuid: "66666666-7777-8888-9999-aaaaaaaaaaaa", name: "PhoneSpot", ssid: "PhoneSpot", priority: 5 },
+      ];
+      this.activeNet = "HomeNet";
+    }
+    return this._nets;
+  }
+
+  netState() {
+    const saved = [...this.nets].sort((a, b) => b.priority - a.priority)
+      .map((n) => ({ ...n, active: n.ssid === this.activeNet }));
+    const on = !!this.activeNet;
+    return {
+      wifi: { state: on ? "connected" : "disconnected", ssid: this.activeNet || null, signal: on ? 72 : null, ip: on ? "192.168.1.40" : null },
+      saved, addresses: on ? { wlan0: ["192.168.1.40"] } : {}, hostname: "carpi",
+    };
+  }
+
+  netRequest(cmd, args, fail) {
+    const known = (uuid) => this.nets.find((n) => n.uuid === uuid) || fail("Unknown network id");
+    switch (cmd) {
+      case "net": return this.netState();
+      case "net_scan": {
+        const saved = new Set(this.nets.map((n) => n.ssid));
+        return { nearby: [["HomeNet", 72, true], ["Neighbor 5G", 61, true], ["PhoneSpot", 55, true], ["Cafe Guest", 47, false]]
+          .map(([ssid, signal, secured]) => ({ ssid, signal, secured, saved: saved.has(ssid) })) };
+      }
+      case "net_add": {
+        const { ssid = "", password = "" } = args;
+        if (!ssid || new TextEncoder().encode(ssid).length > 32) fail("Network name: 1 to 32 characters");
+        if (password && (password.length < 8 || password.length > 63)) fail("Password: 8 to 63 characters, or empty for an open network");
+        if (this.nets.some((n) => n.ssid === ssid)) fail(`"${ssid}" is already saved. Forget it first to change its password.`);
+        const priority = Math.max(1, Math.min(...this.nets.map((n) => n.priority), 11) - 1);
+        this.nets.push({ uuid: crypto.randomUUID(), name: ssid, ssid, priority });
+        if (args.connect) setTimeout(() => { this.activeNet = ssid; }, 3000);
+        return { ...this.netState(), added: ssid, connecting: !!args.connect };
+      }
+      case "net_forget": {
+        const n = known(args.uuid);
+        this._nets = this.nets.filter((x) => x !== n);
+        if (this.activeNet === n.ssid) this.activeNet = this.nets.length ? this.nets[0].ssid : null;
+        return this.netState();
+      }
+      case "net_priority":
+        if (!Array.isArray(args.order)) fail("order: a list of network ids, most preferred first");
+        args.order.forEach((uuid, i) => { known(uuid).priority = Math.max(1, 10 - i); });
+        return this.netState();
+      case "net_connect": {
+        const n = known(args.uuid);
+        setTimeout(() => { this.activeNet = n.ssid; }, 3000);
+        return { ...this.netState(), connecting: true };
+      }
+      default: return null;
+    }
   }
 
   async request(cmd, args = {}) {
     await new Promise((r) => setTimeout(r, 150));
     const fail = (error) => { throw new Error(error); };
     switch (cmd) {
-      case "hello": return { ok: true, protocol: 2, catalog: this.catalog, max_weight: 20, ...this.state() };
+      case "hello": return { ok: true, protocol: 3, catalog: this.catalog, max_weight: 20, ...this.state() };
       case "state": return { ok: true, ...this.state() };
       case "status": return { ok: true, ...this.live() };
       case "live": return { ok: true, live: this.liveValues(args.cols) };
+      case "net": case "net_scan": case "net_add": case "net_forget": case "net_priority": case "net_connect":
+        return { ok: true, ...this.netRequest(cmd, args, fail) };
+      case "clock": {
+        const set = (this.clockSource || "none") === "none";
+        if (set) this.clockSource = "phone";
+        return { ok: true, clock: { synced: false, source: this.clockSource, pi_time_ms: Date.now(), set,
+          reason: set ? "set from the phone" : "the Pi's clock is already ahead of the phone" } };
+      }
+      case "power":
+        if (!["shutdown", "reboot"].includes(args.action)) fail('power: "shutdown" or "reboot"');
+        setTimeout(() => this.disconnect(), 2000);          // the simulated Pi goes away
+        return { ok: true, power: args.action, in_s: 2 };
       case "save": {
         const p = args.preset;
         if (!NAME_OK.test((p.name || "").trim())) fail("name: 1-32 letters, digits, spaces or . ( ) & + - _");
@@ -373,7 +446,8 @@ const app = {
   link: null, catalog: [], maxWeight: 20, presets: [], active: null, tag: "", supported: null,
   status: { state: "unknown" }, open: null, editing: null, dirty: false, timer: null,
   system: null, obd: null, lastReply: 0, rtt: null,
-  tab: ["home", "live"].includes(store("carpi.tab")) ? store("carpi.tab") : "dash",
+  tab: ["home", "live", "settings"].includes(store("carpi.tab")) ? store("carpi.tab") : "dash",
+  net: null, nearby: [], netErr: null, netFastUntil: 0, clock: null,
   protocol: null, liveTimer: null, live: null, liveHist: {}, liveOpen: new Set(), warmHist: [],
   liveSel: Array.isArray(store("carpi.live")) ? store("carpi.live") : null,   // null: the defaults
   units: { temp: "C", speed: "mph", ...(store("carpi.units") || {}) },
@@ -390,6 +464,7 @@ function applyState(msg) {
   if (msg.catalog) app.catalog = msg.catalog;
   if (msg.max_weight) app.maxWeight = msg.max_weight;
   if ("protocol" in msg) app.protocol = msg.protocol;
+  if ("clock" in msg) app.clock = msg.clock;
   if (msg.presets) app.presets = msg.presets;
   if ("active" in msg) app.active = msg.active;
   if ("tag" in msg) app.tag = msg.tag;
@@ -403,7 +478,7 @@ function applyState(msg) {
     if (msg.status.hz) store("carpi.hz", msg.status.hz);
   }
   // A status poll redraws only the status card: rebuilding the list mid-tap would eat the tap.
-  if (msg.presets) render(); else { renderConn(false); renderStatus(); renderDash(); renderLive(); }
+  if (msg.presets) render(); else { renderConn(false); renderStatus(); renderDash(); renderLive(); renderSettings(); }
 }
 
 function toast(text, error = false) {
@@ -462,6 +537,14 @@ async function connect(demo = false) {
     const hello = await app.link.request("hello");
     app.rtt = performance.now() - t0;
     applyState(hello);
+    // The Pi has no battery-backed clock: if it hasn't synced over the internet, offer it ours
+    // (carpi_admin.py only takes it when it's later than the Pi's own time).
+    if (hello.protocol >= 3 && hello.clock && !hello.clock.synced) {
+      try {
+        const r = await app.link.request("clock", { now_ms: Date.now() });
+        app.clock = { synced: r.clock.synced, source: r.clock.source };
+      } catch { /* best effort: the Settings tab has a button too */ }
+    }
   } catch (e) {
     if (e.name !== "NotFoundError") toast(friendly(e), true);   // NotFoundError = chooser cancelled
   }
@@ -512,6 +595,7 @@ function render() {
   renderPresets();
   renderDash();
   renderLive();
+  renderSettings();
 }
 
 function renderConn(withList = true) {
@@ -521,7 +605,7 @@ function renderConn(withList = true) {
   $("#connect").classList.toggle("primary", !on);
   for (const el of ["#tag-input", "#tag-save", "#new-preset"]) $(el).disabled = !on;
   if (!on && withList) renderPresets();
-  if (!on) { renderDash(); renderLive(); }
+  if (!on) { renderDash(); renderLive(); renderSettings(); }
 }
 
 function presetName(id) {
@@ -741,13 +825,14 @@ $("#save-apply").addEventListener("click", () => save(true));
 function showTab(tab) {
   app.tab = tab;
   store("carpi.tab", tab);
-  for (const t of ["dash", "live", "home"]) {
+  for (const t of ["dash", "live", "home", "settings"]) {
     $(`#${t}`).hidden = tab !== t;
     $(`#tab-${t}`).setAttribute("aria-selected", String(tab === t));
   }
-  $("#page-title").textContent = { dash: "Dashboard", live: "Live", home: "Logging" }[tab];
+  $("#page-title").textContent = { dash: "Dashboard", live: "Live", home: "Logging", settings: "Settings" }[tab];
   if (tab === "dash") renderDash();
   if (tab === "live") renderLive();
+  if (tab === "settings") { netLast = -Infinity; renderSettings(); }   // refresh on the next tick
 }
 
 function chip(el, kind, text, live = false) {
@@ -1272,6 +1357,262 @@ $("#u-speed").addEventListener("click", () => {
   store("carpi.units", app.units);
   renderLive();
 });
+
+// ---------- settings ----------
+// Wi-Fi, power and clock on the Pi (protocol 3: carpi_net.py / carpi_admin.py, allowed by
+// pi-setup/50-carpi.rules). A Wi-Fi password only ever lives in the form field: it's cleared the
+// moment it's sent with net_add, and never kept in app state or localStorage.
+
+const NET_EVERY_MS = 5000;
+const NET_FAST_MS = 2000;          // for 20 s after a connect, to show the result
+const SETUP_RE = /not available on this Pi|isn't set up for settings/i;
+const settingsSupported = () => num(app.protocol) && app.protocol >= 3;
+let netLast = -Infinity;
+let netInFlight = false;
+
+async function netRequest(cmd, args = {}, quiet = false) {
+  try {
+    const msg = await app.link.request(cmd, args);
+    app.netErr = null;
+    if (msg.wifi) app.net = msg;
+    renderSettings();
+    return msg;
+  } catch (e) {
+    if (SETUP_RE.test(e.message)) app.netErr = e.message;
+    else if (!quiet) toast(e.message, true);
+    renderSettings();
+    return null;
+  }
+}
+
+function settingsHint() {
+  if (!connected()) return "Connect to CarPi to change its settings.";
+  if (app.protocol !== null && !settingsSupported()) {
+    return "The CarPi software on this Pi doesn't have settings yet. In an SSH session on the Pi: "
+      + "cd ~/carpi && git pull, then sudo ~/carpi/pi-setup/install.sh";
+  }
+  return app.netErr || "";
+}
+
+function renderSettings() {
+  if (app.tab !== "settings") return;
+  const hint = settingsHint();
+  $("#settings-hint").textContent = hint;
+  $("#settings-hint").hidden = !hint;
+  const on = connected() && settingsSupported() && !app.netErr;
+  for (const id of ["#net-add-open", "#ssh-copy", "#clock-sync", "#pi-restart", "#pi-shutdown"]) $(id).disabled = !on;
+  if (!on) $("#addnet").hidden = true;
+  renderWifi(on);
+  renderPiInfo(on);
+}
+
+function renderWifi(on) {
+  const n = on ? app.net : null;
+  if (!n) {
+    chip($("#wifi-chip"), "", "—");
+    $("#wifi-line").textContent = on ? "Reading the Pi's Wi-Fi…" : "—";
+    $("#wifi-sub").textContent = "";
+    $("#nets").innerHTML = "";
+    return;
+  }
+  const w = n.wifi || {};
+  const up = w.state === "connected";
+  chip($("#wifi-chip"), up ? "ok" : "warn", up ? "Connected" : "Offline", up);
+  $("#wifi-line").textContent = up ? `Connected to ${w.ssid || "Wi-Fi"}`
+    : /^connecting/.test(w.state || "") ? "Connecting…" : "Not connected to Wi-Fi";
+  $("#wifi-sub").textContent = [num(w.signal) ? `signal ${w.signal}%` : null, w.ip].filter(Boolean).join(" · ");
+  const saved = n.saved || [];
+  $("#nets").innerHTML = saved.length ? saved.map((x, i) => `
+    <li class="net${x.active ? " active" : ""}" data-uuid="${esc(x.uuid)}">
+      <span><span class="name">${esc(x.ssid)}</span>${x.active ? ` <span class="badge active">Connected</span>` : ""}
+        <br><span class="meta">${i === 0 ? "tried first" : `tried #${i + 1}`}</span></span>
+      <span class="net-actions">
+        <button class="btn arrow" type="button" data-act="up" aria-label="Move ${esc(x.ssid)} up" ${i === 0 ? "disabled" : ""}>↑</button>
+        <button class="btn arrow" type="button" data-act="down" aria-label="Move ${esc(x.ssid)} down" ${i === saved.length - 1 ? "disabled" : ""}>↓</button>
+        ${x.active ? "" : `<button class="btn" type="button" data-act="connect">Connect</button>`}
+        <button class="btn danger" type="button" data-act="forget">Forget</button>
+      </span>
+    </li>`).join("") : `<li class="sub">No saved networks: the Pi won't join any Wi-Fi. Add one below.</li>`;
+}
+
+function renderPiInfo(on) {
+  const n = on ? app.net || {} : {};
+  const c = on ? app.clock : null;
+  const clockText = !c ? "—" : c.synced ? "Synced from the internet"
+    : c.source === "phone" ? "Set from this phone" : "Not synced: times may be off";
+  chip($("#clock-chip"), !c ? "" : c.synced || c.source === "phone" ? "ok" : "warn",
+    !c ? "—" : c.synced ? "Clock synced" : c.source === "phone" ? "Clock from phone" : "Clock not synced");
+  const other = Object.entries(n.addresses || {}).filter(([iface]) => iface !== "wlan0")
+    .map(([iface, ips]) => `${iface} ${ips.join(", ")}`);
+  const rows = [["Hostname", n.hostname || "—"], ["Wi-Fi address", (n.wifi && n.wifi.ip) || "—"]];
+  if (other.length) rows.push(["Other", other.join(" · ")]);
+  rows.push(["Clock", clockText]);
+  $("#pi-kv").innerHTML = rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("");
+  $("#ssh-copy").disabled = !on || !sshTarget();
+  $("#clock-sync").disabled = !on || !!(c && c.synced);
+}
+
+function sshTarget() {
+  const n = app.net || {};
+  const ip = (n.wifi && n.wifi.ip) || Object.values(n.addresses || {}).flat()[0];
+  return ip ? `ssh carpi@${ip}` : null;
+}
+
+// ---- saved networks: reorder, connect, forget ----
+$("#nets").addEventListener("click", async (e) => {
+  const btn = e.target.closest("[data-act]");
+  const li = e.target.closest(".net");
+  if (!btn || !li || !app.net) return;
+  const saved = app.net.saved || [];
+  const i = saved.findIndex((x) => x.uuid === li.dataset.uuid);
+  if (i < 0) return;
+  const net = saved[i];
+  switch (btn.dataset.act) {
+    case "up": case "down": {
+      const j = btn.dataset.act === "up" ? i - 1 : i + 1;
+      const order = saved.map((x) => x.uuid);
+      [order[i], order[j]] = [order[j], order[i]];
+      await netRequest("net_priority", { order });
+      break;
+    }
+    case "connect":
+      if (await netRequest("net_connect", { uuid: net.uuid })) {
+        toast(`Connecting to ${net.ssid}…`);
+        app.netFastUntil = performance.now() + 20000;
+      }
+      break;
+    case "forget": {
+      const last = saved.length === 1;
+      const text = `Forget "${net.ssid}"? The Pi won't join it again until you add it back.`
+        + (last ? " It's the only saved network: the Pi will have no Wi-Fi (Bluetooth still works)." : "")
+        + (net.active ? " The Pi disconnects from it now, which ends any SSH session over it." : "");
+      if (await confirmBox(text, "Forget") && await netRequest("net_forget", { uuid: net.uuid })) toast(`Forgot "${net.ssid}"`);
+      break;
+    }
+  }
+});
+
+// ---- adding a network ----
+async function scanNearby(rescan) {
+  const msg = await netRequest("net_scan", { rescan });
+  if (!msg) return;
+  app.nearby = msg.nearby || [];
+  $("#nearby").innerHTML = app.nearby.length ? app.nearby.map((x) => `
+    <li><button type="button" data-ssid="${esc(x.ssid)}" data-secured="${x.secured}">
+      <span>${x.secured ? "🔒 " : ""}${esc(x.ssid)}${x.saved ? ` <span class="badge">saved</span>` : ""}</span>
+      <span class="sig">${x.signal}%</span>
+    </button></li>`).join("") : `<li class="sub">No networks found yet.</li>`;
+}
+
+async function openAdd() {
+  $("#addnet").hidden = false;
+  $("#net-form").hidden = true;
+  $("#nearby").innerHTML = `<li class="sub">Scanning…</li>`;
+  await scanNearby(true);
+  setTimeout(() => { if (!$("#addnet").hidden) scanNearby(false); }, 4000);   // results trickle in
+}
+
+function closeAdd() {
+  $("#net-pass").value = "";
+  $("#net-err").hidden = true;
+  $("#net-form").hidden = true;
+  $("#addnet").hidden = true;
+}
+
+function openForm(ssid, secured) {
+  $("#net-form").hidden = false;
+  $("#net-ssid").value = ssid;
+  $("#net-pass").value = "";
+  $("#net-pass").placeholder = secured ? "" : "open network: leave empty";
+  $("#net-err").hidden = true;
+  (ssid ? $("#net-pass") : $("#net-ssid")).focus();
+}
+
+function formError(text) {
+  $("#net-err").textContent = text;
+  $("#net-err").hidden = false;
+}
+
+$("#net-add-open").addEventListener("click", openAdd);
+$("#net-rescan").addEventListener("click", () => scanNearby(true));
+$("#net-cancel").addEventListener("click", closeAdd);
+$("#net-other").addEventListener("click", () => openForm("", true));
+$("#nearby").addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-ssid]");
+  if (b) openForm(b.dataset.ssid, b.dataset.secured === "true");
+});
+$("#net-show").addEventListener("click", (e) => {
+  const show = $("#net-pass").type === "password";
+  $("#net-pass").type = show ? "text" : "password";
+  e.target.textContent = show ? "Hide" : "Show";
+  e.target.setAttribute("aria-pressed", String(show));
+});
+
+$("#net-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const ssid = $("#net-ssid").value;
+  const connect = !!(e.submitter && e.submitter.value === "connect");
+  const bytes = new TextEncoder().encode(ssid).length;
+  const pw = $("#net-pass").value;
+  if (bytes < 1 || bytes > 32) { formError("Network name: 1 to 32 characters."); return; }
+  if (pw && (pw.length < 8 || pw.length > 63)) { formError("Password: 8 to 63 characters, or empty for an open network."); return; }
+  $("#net-pass").value = "";                     // sent once, never kept
+  try {
+    const msg = await app.link.request("net_add", { ssid, password: pw, connect });
+    app.net = msg;
+    closeAdd();
+    toast(connect ? `Saved "${ssid}", connecting…` : `Saved "${ssid}"`);
+    if (connect) app.netFastUntil = performance.now() + 20000;
+    renderSettings();
+  } catch (err) {
+    formError(`${err.message} Enter the password again to retry.`);
+  }
+});
+
+// ---- this Pi: SSH command, clock ----
+$("#ssh-copy").addEventListener("click", async () => {
+  const cmd = sshTarget();
+  if (!cmd) return;
+  try { await navigator.clipboard.writeText(cmd); toast(`Copied: ${cmd}`); }
+  catch { toast(cmd); }                          // no clipboard access: show it instead
+});
+
+$("#clock-sync").addEventListener("click", async () => {
+  try {
+    const r = await app.link.request("clock", { now_ms: Date.now() });
+    app.clock = { synced: r.clock.synced, source: r.clock.source };
+    toast(r.clock.set ? "Pi clock set from this phone" : `Not changed: ${r.clock.reason}`);
+  } catch (e) { toast(e.message, true); }
+  renderSettings();
+});
+
+// ---- power ----
+async function power(action) {
+  try {
+    await app.link.request("power", { action });
+    toast(action === "shutdown"
+      ? "Shutting down… The Pi is off in a few seconds and starts again next time you turn the key."
+      : "Restarting… Reconnect in about a minute.");
+  } catch (e) { toast(e.message, true); }
+}
+
+$("#pi-restart").addEventListener("click", async () => {
+  if (await confirmBox("Restart the Pi? Logging pauses for about a minute: the drive being logged is closed cleanly, and a new file starts after the restart.", "Restart")) power("reboot");
+});
+
+$("#pi-shutdown").addEventListener("click", async () => {
+  if (await confirmBox("Shut the Pi down? It powers off and stays off until the car's power comes back (next time you turn the key). The drive being logged is closed cleanly.", "Shut down")) power("shutdown");
+});
+
+// Refresh the Wi-Fi state while the Settings tab is on screen: every 5 s, every 2 s after a connect.
+setInterval(async () => {
+  if (app.tab !== "settings" || document.hidden || !connected() || app.editing || netInFlight || !settingsSupported()) return;
+  const now = performance.now();
+  if (now - netLast < (now < app.netFastUntil ? NET_FAST_MS : NET_EVERY_MS)) return;
+  netInFlight = true;
+  netLast = now;
+  try { await netRequest("net", {}, true); } finally { netInFlight = false; }
+}, 1000);
 
 // ---------- start ----------
 
