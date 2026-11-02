@@ -1,0 +1,10 @@
+[Unit]
+Description=Upload finished CarPi drives every 2 minutes
+
+[Timer]
+OnBootSec=60
+OnUnitActiveSec=2min
+AccuracySec=10s
+
+[Install]
+WantedBy=timers.target

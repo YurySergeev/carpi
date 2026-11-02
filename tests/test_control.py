@@ -206,10 +206,15 @@ class FakeAdmin:
         self.ran = []
 
     def clock_status(self):
-        return {"synced": False, "source": "none", "pi_time_ms": 1}
+        return {"synced": False, "source": "none", "pi_time_ms": 1, "zone": "UTC"}
 
     def set_clock(self, now_ms):
         return {"synced": False, "source": "phone", "pi_time_ms": now_ms, "set": True, "reason": "set from the phone"}
+
+    def set_zone(self, zone):
+        if zone == "Mars/Olympus":
+            raise ValueError("unknown time zone: Mars/Olympus")
+        return {"zone": zone, "set": True, "reason": "set from the phone"}
 
     def power(self, action):
         if action not in ("shutdown", "reboot"):
@@ -222,11 +227,11 @@ def _settings_ctl(tmp_path):
     return cc.Controller(cp.Store(tmp_path), tmp_path / "status.json", net=net, admin=admin), net, admin
 
 
-def test_protocol_3_and_clock_in_hello(tmp_path):
+def test_protocol_4_and_clock_in_hello(tmp_path):
     ctl, _, _ = _settings_ctl(tmp_path)
     h = _ask(ctl, rid=1, cmd="hello")
-    assert cc.PROTOCOL == 3 and h["protocol"] == 3
-    assert h["clock"] == {"synced": False, "source": "none"}
+    assert h["protocol"] == cc.PROTOCOL >= 4
+    assert h["clock"] == {"synced": False, "source": "none", "zone": "UTC"}
     assert _ask(ctl, rid=2, cmd="state")["clock"]["source"] == "none"
 
 
@@ -275,10 +280,18 @@ def test_clock_request(tmp_path):
     assert r["clock"]["set"] and r["clock"]["source"] == "phone"
 
 
+def test_timezone_request(tmp_path):
+    ctl, _, _ = _settings_ctl(tmp_path)
+    r = _ask(ctl, rid=1, cmd="timezone", zone="America/New_York")
+    assert r["ok"] and r["timezone"] == {"zone": "America/New_York", "set": True, "reason": "set from the phone"}
+    bad = _ask(ctl, rid=2, cmd="timezone", zone="Mars/Olympus")
+    assert not bad["ok"] and "unknown time zone" in bad["error"]
+
+
 def test_settings_unavailable_without_backends(tmp_path):
     ctl = _ctl(tmp_path)
-    for cmd in ("net", "net_scan", "power", "clock"):
-        r = _ask(ctl, rid=1, cmd=cmd, action="reboot", now_ms=1)
+    for cmd in ("net", "net_scan", "power", "clock", "timezone"):
+        r = _ask(ctl, rid=1, cmd=cmd, action="reboot", now_ms=1, zone="UTC")
         assert not r["ok"] and "not available" in r["error"]
     assert "clock" not in _ask(ctl, rid=2, cmd="hello")
 
@@ -286,4 +299,63 @@ def test_settings_unavailable_without_backends(tmp_path):
 def test_settings_replies_stay_small(tmp_path):
     ctl, _, _ = _settings_ctl(tmp_path)
     for msg in ({"cmd": "net"}, {"cmd": "net_scan"}, {"cmd": "hello"}):
+        assert len(ctl.handle_line(json.dumps(dict(msg, rid=1)))) < 4096
+
+
+# ---- uploads (protocol 5; carpi_sync.Uploads on temp files) ----
+
+import carpi_sync  # noqa: E402
+
+
+def _upload_ctl(tmp_path, set_up=True):
+    if set_up:
+        (tmp_path / "logs" / ".git").mkdir(parents=True)
+    uploads = carpi_sync.Uploads(settings=tmp_path / "upload.json", logs=tmp_path / "logs",
+                                 sync_file=tmp_path / "sync.json", trigger=tmp_path / "sync-now",
+                                 up=lambda: 500.0)
+    return cc.Controller(cp.Store(tmp_path), tmp_path / "status.json", uploads=uploads)
+
+
+def test_protocol_5_and_sync_everywhere(tmp_path):
+    ctl = _upload_ctl(tmp_path)
+    h = _ask(ctl, rid=1, cmd="hello")
+    assert cc.PROTOCOL == 5 and h["protocol"] == 5
+    assert h["sync"]["set_up"] and h["sync"]["auto"] and h["sync"]["publish"]
+    assert "sync" in _ask(ctl, rid=2, cmd="status") and "sync" in _ask(ctl, rid=3, cmd="state")
+
+
+def test_upload_settings(tmp_path):
+    ctl = _upload_ctl(tmp_path)
+    r = _ask(ctl, rid=1, cmd="upload", publish=False)
+    assert r["ok"] and r["sync"]["publish"] is False and r["sync"]["auto"] is True
+    r = _ask(ctl, rid=2, cmd="upload", auto=False, publish=True)
+    assert r["sync"]["auto"] is False and r["sync"]["publish"] is True and r["sync"]["next_try_s"] is None
+    assert json.loads((tmp_path / "upload.json").read_text()) == {"auto": False, "publish": True}
+    for bad in ({}, {"auto": "off"}, {"publish": 0}):
+        r = _ask(ctl, rid=3, cmd="upload", **bad)
+        assert not r["ok"] and "true or false" in r["error"]
+    assert json.loads((tmp_path / "upload.json").read_text()) == {"auto": False, "publish": True}
+
+
+def test_upload_now(tmp_path):
+    r = _ask(_upload_ctl(tmp_path, set_up=False), rid=1, cmd="upload_now")
+    assert not r["ok"] and "set up" in r["error"] and not (tmp_path / "sync-now").exists()
+    r = _ask(_upload_ctl(tmp_path), rid=2, cmd="upload_now")
+    assert r["ok"] and r["started"] and r["sync"]["state"] == "uploading"
+    assert (tmp_path / "sync-now").exists()
+
+
+def test_uploads_unavailable_without_the_backend(tmp_path):
+    ctl = _ctl(tmp_path)
+    for cmd in ("upload", "upload_now"):
+        r = _ask(ctl, rid=1, cmd=cmd, auto=True)
+        assert not r["ok"] and "not available" in r["error"]
+    assert "sync" not in _ask(ctl, rid=2, cmd="hello")
+
+
+def test_upload_replies_stay_small(tmp_path):
+    ctl = _upload_ctl(tmp_path)
+    (tmp_path / "sync.json").write_text(json.dumps({"state": "failed", "error": "x" * 200, "waiting": 12,
+                                                     "attempt_up": 400.0, "success_up": 100.0}))
+    for msg in ({"cmd": "hello"}, {"cmd": "status"}, {"cmd": "upload", "auto": True}):
         assert len(ctl.handle_line(json.dumps(dict(msg, rid=1)))) < 4096

@@ -9,11 +9,15 @@ Render (free): the first `render` run asks for the repo URL (an EMPTY GitHub rep
 https://github.com/YurySergeev/carpi-live) and remembers it in deploy/build/.remote. Each run commits the
 current app + drives there and pushes; Render redeploys automatically.
 
-Every unique drive is bundled (identical copies skipped, drives under 10 rows left out).
+Every unique drive is bundled (identical copies skipped, drives under 10 rows left out, and drives
+recorded with publishing switched off on the phone page left out: "publish": false in their .json).
 Use --exclude "*2026-09-25*" (repeatable) to leave drives out, --include to keep only matches.
+--logs DIR (repeatable) reads drives from DIR instead of logs/ and data/: the carpi-data workflow
+uses it on its checkout.
 """
 import argparse
 import fnmatch
+import json
 import shutil
 import subprocess
 import sys
@@ -42,7 +46,16 @@ def drive_dest(path, roots):
     return Path(p.name)
 
 
-def build(include, exclude):
+def private(meta_path):
+    """A drive recorded while publishing was off on the phone page ("publish": false)."""
+    try:
+        meta = json.loads(Path(meta_path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return isinstance(meta, dict) and meta.get("publish") is False
+
+
+def build(include, exclude, dirs=None):
     from carpi_app import config
     from carpi_app.data import Store
 
@@ -53,8 +66,8 @@ def build(include, exclude):
     shutil.copytree(TEMPLATE, BUILD, dirs_exist_ok=True)
     shutil.copytree(ROOT / "carpi_app", BUILD / "carpi_app", ignore=SKIP)
 
-    store = Store(config.LOG_DIRS)
-    n, size = 0, 0
+    store = Store(dirs or config.LOG_DIRS)
+    n, size, hidden = 0, 0, 0
     for info in store.drives.values():
         rel = drive_dest(info.path, store.dirs)
         key = rel.as_posix()
@@ -62,15 +75,19 @@ def build(include, exclude):
             continue
         if any(fnmatch.fnmatch(key, g) for g in exclude) or info.rows < 10:
             continue
+        side = Path(info.path).with_suffix(".json")
+        if private(side):
+            hidden += 1
+            continue
         dst = BUILD / "drives" / rel
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(info.path, dst)
-        side = Path(info.path).with_suffix(".json")
         if side.exists():
             shutil.copy2(side, dst.with_suffix(".json"))
         n += 1
         size += dst.stat().st_size
-    print(f"Built {BUILD}  ({n} drives, {size / 1e6:.1f} MB of logs)")
+    note = f"; left out {hidden} private drive(s)" if hidden else ""
+    print(f"Built {BUILD}  ({n} drives, {size / 1e6:.1f} MB of logs{note})")
     return n
 
 
@@ -139,10 +156,12 @@ def main():
     ap.add_argument("--repo", help="hf: Space id, e.g. yourname/carpi-analyzer")
     ap.add_argument("--include", action="append", default=[], help="only drives matching this glob (repeatable)")
     ap.add_argument("--exclude", action="append", default=[], help="skip drives matching this glob (repeatable)")
+    ap.add_argument("--logs", action="append", type=Path,
+                    help="read drives from this folder instead of logs/ and data/ (repeatable)")
     a = ap.parse_args()
     if a.target == "hf" and not a.repo:
         ap.error("hf needs --repo NAME/carpi-analyzer")
-    if not build(a.include, a.exclude):
+    if not build(a.include, a.exclude, dirs=a.logs):
         sys.exit("No drives matched; nothing to publish.")
     if a.target == "render":
         publish_render(a.remote)

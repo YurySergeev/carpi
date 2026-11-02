@@ -2,6 +2,7 @@
 import csv
 from datetime import datetime
 import json
+import re
 import threading
 import time
 import uuid
@@ -83,7 +84,8 @@ def rig(tmp_path, monkeypatch):
                      preset_file=str(tmp_path / "active_preset.json"),
                      supported_file=str(tmp_path / "supported.json"),
                      status_file=str(tmp_path / "status.json"),
-                     live_file=str(tmp_path / "live.json"), end_after=1.0, hz=50, once=True)
+                     live_file=str(tmp_path / "live.json"), upload_file=str(tmp_path / "upload.json"),
+                     end_after=1.0, hz=50, once=True)
     ecu = FakeEcu(channel)
     ecu.start()
     logger = threading.Thread(target=cl.run, args=(args,), daemon=True)
@@ -248,3 +250,56 @@ def test_no_start_correction_when_the_clock_was_good_all_along(rig, monkeypatch)
     _finish(rig)
     [(_, rows, meta)] = _drives(rig)
     assert all(r["clock_ok"] == "1" for r in rows) and "start_corrected" not in meta
+
+
+def test_utc_offset_format():
+    off = cl.utc_offset(datetime(2026, 11, 2, 12, 0))
+    assert re.fullmatch(r"[+-]\d\d:\d\d", off)
+    z = datetime(2026, 11, 2, 12, 0).astimezone().strftime("%z")
+    assert off == f"{z[:3]}:{z[3:]}"
+
+
+def test_each_drive_reloads_the_zone_and_records_its_offset(rig, monkeypatch):
+    calls = []
+    monkeypatch.setattr(cl.time, "tzset", lambda: calls.append(1), raising=False)
+    rig.logger.start()
+    assert _wait(lambda: _status(rig).get("rows", 0) >= 5)
+    _finish(rig)
+    [(_, rows, meta)] = _drives(rig)
+    assert calls and re.fullmatch(r"[+-]\d\d:\d\d", meta["utc_offset"])
+
+
+def _meta_now(rig):
+    files = sorted((rig.tmp / "logs").glob("*/*.json"))
+    return json.loads(files[0].read_text()) if files else {}
+
+
+def test_publishing_off_from_the_start_marks_the_drive_private(rig):
+    (rig.tmp / "upload.json").write_text('{"auto": true, "publish": false}')
+    rig.logger.start()
+    assert _wait(lambda: _status(rig).get("rows", 0) >= 5)
+    _finish(rig)
+    [(_, rows, meta)] = _drives(rig)
+    assert meta["publish"] is False
+
+
+def test_publishing_switched_off_mid_drive_sticks(rig):
+    upload = rig.tmp / "upload.json"
+    rig.logger.start()
+    assert _wait(lambda: _status(rig).get("rows", 0) >= 5)
+    assert "publish" not in _meta_now(rig)
+    upload.write_text('{"publish": false}')
+    assert _wait(lambda: _meta_now(rig).get("publish") is False, timeout=3)   # written at once
+    upload.write_text('{"publish": true}')                  # back on: this drive stays private
+    time.sleep(0.6)
+    _finish(rig)
+    [(_, rows, meta)] = _drives(rig)
+    assert meta["publish"] is False
+
+
+def test_no_upload_settings_means_no_publish_key(rig):
+    rig.logger.start()
+    assert _wait(lambda: _status(rig).get("rows", 0) >= 5)
+    _finish(rig)
+    [(_, rows, meta)] = _drives(rig)
+    assert "publish" not in meta

@@ -9,8 +9,8 @@
   <meta name="robots" content="noindex">
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="manifest" href="manifest.webmanifest">
-  <link rel="stylesheet" href="config.css?v=5">
-  <script src="config.js?v=5" defer></script>
+  <link rel="stylesheet" href="config.css?v=7">
+  <script src="config.js?v=7" defer></script>
 </head>
 <body>
   <div class="page">
@@ -171,6 +171,20 @@
           <button class="btn small" id="ssh-copy" type="button">Copy SSH command</button>
           <button class="btn small" id="clock-sync" type="button">Sync clock from phone</button>
         </div>
+      </section>
+
+      <section class="card" id="uploads-card" aria-live="polite" hidden>
+        <div class="card-head"><h2>Uploads</h2><span class="chip" id="sync-chip">—</span></div>
+        <p class="state" id="sync-line">—</p>
+        <label class="switch"><span>Upload automatically</span><input type="checkbox" id="up-auto" role="switch"></label>
+        <p class="sub">Off: drives stay on the Pi until you tap Upload now.</p>
+        <label class="switch"><span>Publish new drives</span><input type="checkbox" id="up-publish" role="switch"></label>
+        <p class="sub">Off: drives are still backed up privately, but stay off the public analyzer. Includes the drive being recorded now.</p>
+        <div class="row wrap center">
+          <button class="btn small" id="up-now" type="button">Upload now</button>
+          <a class="link" href="https://carpi-analyzer.onrender.com" target="_blank" rel="noopener">Open the analyzer ↗</a>
+        </div>
+        <p class="hint">The drive being recorded uploads after it ends.</p>
       </section>
 
       <section class="card" id="power-card">

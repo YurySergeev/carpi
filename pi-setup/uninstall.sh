@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Undo pi-setup/install.sh: the Settings tab then can't change Wi-Fi, power or the clock (the phone
-# shows the setup message). Presets, the Live tab and logging are unaffected.
+# Undo pi-setup/install.sh: the Settings tab then can't change Wi-Fi, power, the clock or the
+# time zone (the phone shows the setup message). Presets, the Live tab and logging are unaffected.
 #   sudo ~/carpi/pi-setup/uninstall.sh
 set -euo pipefail
 

@@ -209,6 +209,9 @@ class DemoLink {
     this.connected = false;
     this.name = "CarPi (demo)";
     this.onclose = null;
+    // carpi_sync.py's state: backed up a couple of minutes ago (times in phone ms, not Pi uptime)
+    this.upload = { auto: true, publish: true, state: "ok", waiting: 0, error: null,
+      success: Date.now() - 140000, attempt: Date.now() - 20000 };
   }
 
   async connect() { await new Promise((r) => setTimeout(r, 400)); this.connected = true; this.engineOn = Date.now(); }
@@ -235,6 +238,7 @@ class DemoLink {
     const mhz = busy ? (Math.random() < 0.7 ? 1800 : 1500) : (Math.random() < 0.8 ? 600 : 1800);
     return {
       status: this.status(),
+      sync: this.syncStatus(),
       system: {
         cpu_temp_c: j(busy ? 54 : 47, 1.2), cpu_pct: j(busy ? 17 : 3, busy ? 5 : 1.5), cpu_mhz: mhz,
         cpu_max_mhz: 1800, cores: 4, load_1m: j(busy ? 0.62 : 0.08, 0.05), mem_pct: j(busy ? 23 : 18, 0.4),
@@ -248,6 +252,18 @@ class DemoLink {
         : { iface: "can0", present: true, up: true, controller: "ERROR-ACTIVE", bitrate: 500000, tx_errors: 0,
             rx_errors: 0, rx_per_s: 0, last_frame_s: null, verdict: "quiet" },
     };
+  }
+
+  // Same shape as carpi_sync.Uploads.status(). With automatic uploads on, a run every 2 minutes.
+  syncStatus() {
+    const u = this.upload, now = Date.now();
+    if (u.auto && u.state !== "uploading" && now - u.attempt >= 120000) {
+      Object.assign(u, { state: "ok", waiting: 0, error: null, attempt: now, success: now });
+    }
+    const age = (t) => (t ? +((now - t) / 1000).toFixed(1) : null);
+    return { set_up: true, auto: u.auto, publish: u.publish, state: u.state, waiting: u.waiting, error: u.error,
+      last_success_age_s: age(u.success), last_attempt_age_s: age(u.attempt),
+      next_try_s: u.auto ? Math.max(0, Math.round(120 - (now - u.attempt) / 1000)) : null };
   }
 
   // A cold start, sped up so the warm-up stages change within a few minutes. t = seconds running.
@@ -293,7 +309,7 @@ class DemoLink {
     const presets = this.builtin.map((p) => ({ ...p, builtin: true }))
       .concat([...this.user].sort((a, b) => a.name.localeCompare(b.name)).map((p) => ({ ...p, builtin: false })));
     return { ...this.live(), presets, active: this.active, tag: this.tag, supported: this.supported,
-      clock: { synced: false, source: this.clockSource || "none" } };
+      clock: { synced: false, source: this.clockSource || "none", zone: this.zone || "UTC" } };
   }
 
   // ---- settings: same shapes as carpi_net.py / carpi_admin.py (made-up network names) ----
@@ -360,7 +376,7 @@ class DemoLink {
     await new Promise((r) => setTimeout(r, 150));
     const fail = (error) => { throw new Error(error); };
     switch (cmd) {
-      case "hello": return { ok: true, protocol: 3, catalog: this.catalog, max_weight: 20, ...this.state() };
+      case "hello": return { ok: true, protocol: 5, catalog: this.catalog, max_weight: 20, ...this.state() };
       case "state": return { ok: true, ...this.state() };
       case "status": return { ok: true, ...this.live() };
       case "live": return { ok: true, live: this.liveValues(args.cols) };
@@ -369,8 +385,30 @@ class DemoLink {
       case "clock": {
         const set = (this.clockSource || "none") === "none";
         if (set) this.clockSource = "phone";
-        return { ok: true, clock: { synced: false, source: this.clockSource, pi_time_ms: Date.now(), set,
+        return { ok: true, clock: { synced: false, source: this.clockSource, pi_time_ms: Date.now(),
+          zone: this.zone || "UTC", set,
           reason: set ? "set from the phone" : "the Pi's clock is already ahead of the phone" } };
+      }
+      case "timezone": {                  // the demo Pi starts in UTC, so connecting shows the switch
+        if (typeof args.zone !== "string" || !/^[A-Za-z0-9_+-]+(\/[A-Za-z0-9_+-]+)*$/.test(args.zone))
+          fail("zone: a time zone name like America/New_York");
+        const set = args.zone !== (this.zone || "UTC");
+        this.zone = args.zone;
+        return { ok: true, timezone: { zone: this.zone, set,
+          reason: set ? "set from the phone" : "already this time zone" } };
+      }
+      case "upload": {
+        const keys = ["auto", "publish"].filter((k) => k in args);
+        if (!keys.length) fail("upload: give auto and/or publish (true or false)");
+        for (const k of keys) if (typeof args[k] !== "boolean") fail(`upload: ${k} must be true or false`);
+        for (const k of keys) this.upload[k] = args[k];
+        return { ok: true, sync: this.syncStatus() };
+      }
+      case "upload_now": {
+        const u = this.upload;
+        Object.assign(u, { state: "uploading", error: null, attempt: Date.now() });
+        setTimeout(() => Object.assign(u, { state: "ok", waiting: 0, success: Date.now() }), 2500);
+        return { ok: true, sync: this.syncStatus(), started: true };
       }
       case "power":
         if (!["shutdown", "reboot"].includes(args.action)) fail('power: "shutdown" or "reboot"');
@@ -447,7 +485,7 @@ const app = {
   status: { state: "unknown" }, open: null, editing: null, dirty: false, timer: null,
   system: null, obd: null, lastReply: 0, rtt: null,
   tab: ["home", "live", "settings"].includes(store("carpi.tab")) ? store("carpi.tab") : "dash",
-  net: null, nearby: [], netErr: null, netFastUntil: 0, clock: null,
+  net: null, nearby: [], netErr: null, netFastUntil: 0, clock: null, sync: null, syncBusy: false,
   protocol: null, liveTimer: null, live: null, liveHist: {}, liveOpen: new Set(), warmHist: [],
   liveSel: Array.isArray(store("carpi.live")) ? store("carpi.live") : null,   // null: the defaults
   units: { temp: "C", speed: "mph", ...(store("carpi.units") || {}) },
@@ -465,6 +503,8 @@ function applyState(msg) {
   if (msg.max_weight) app.maxWeight = msg.max_weight;
   if ("protocol" in msg) app.protocol = msg.protocol;
   if ("clock" in msg) app.clock = msg.clock;
+  if ("sync" in msg) { if (!app.syncBusy) app.sync = msg.sync; }    // a reply on its way wins
+  else if ("protocol" in msg) app.sync = null;                       // a Pi without uploads (protocol < 5)
   if (msg.presets) app.presets = msg.presets;
   if ("active" in msg) app.active = msg.active;
   if ("tag" in msg) app.tag = msg.tag;
@@ -542,8 +582,17 @@ async function connect(demo = false) {
     if (hello.protocol >= 3 && hello.clock && !hello.clock.synced) {
       try {
         const r = await app.link.request("clock", { now_ms: Date.now() });
-        app.clock = { synced: r.clock.synced, source: r.clock.source };
+        app.clock = { ...app.clock, synced: r.clock.synced, source: r.clock.source };
       } catch { /* best effort: the Settings tab has a button too */ }
+    }
+    // Drive names use the Pi's local time: match its time zone to this phone's (protocol 4).
+    const zone = phoneZone();
+    if (hello.protocol >= 4 && zone && app.clock && zone !== app.clock.zone) {
+      try {
+        const r = await app.link.request("timezone", { zone });
+        app.clock = { ...app.clock, zone: r.timezone.zone };
+        if (r.timezone.set) toast(`Pi time zone set to ${r.timezone.zone}`);
+      } catch (e) { toast(e.message, true); }
     }
   } catch (e) {
     if (e.name !== "NotFoundError") toast(friendly(e), true);   // NotFoundError = chooser cancelled
@@ -553,6 +602,10 @@ async function connect(demo = false) {
   if (app.link.connected) startPolling();
   renderConn();
   renderDash();
+}
+
+function phoneZone() {
+  try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ""; } catch { return ""; }
 }
 
 function friendly(e) {
@@ -934,6 +987,7 @@ function renderCar() {
   }
   rows.push(["Preset", s.preset ? s.preset.name : (app.active ? presetName(app.active) : "—")]);
   rows.push(["Tag", app.tag || "none"]);
+  if (app.sync) rows.push(["Upload", syncSummary(app.sync)[2] + (app.sync.publish === false ? " · private" : "")]);
   $("#car-kv").innerHTML = rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("");
 }
 
@@ -1360,8 +1414,9 @@ $("#u-speed").addEventListener("click", () => {
 
 // ---------- settings ----------
 // Wi-Fi, power and clock on the Pi (protocol 3: carpi_net.py / carpi_admin.py, allowed by
-// pi-setup/50-carpi.rules). A Wi-Fi password only ever lives in the form field: it's cleared the
-// moment it's sent with net_add, and never kept in app state or localStorage.
+// pi-setup/50-carpi.rules); protocol 4 adds the time zone, matched to the phone's on connect.
+// A Wi-Fi password only ever lives in the form field: it's cleared the moment it's sent with
+// net_add, and never kept in app state or localStorage.
 
 const NET_EVERY_MS = 5000;
 const NET_FAST_MS = 2000;          // for 20 s after a connect, to show the result
@@ -1404,6 +1459,7 @@ function renderSettings() {
   if (!on) $("#addnet").hidden = true;
   renderWifi(on);
   renderPiInfo(on);
+  renderUploads();
 }
 
 function renderWifi(on) {
@@ -1446,10 +1502,57 @@ function renderPiInfo(on) {
     .map(([iface, ips]) => `${iface} ${ips.join(", ")}`);
   const rows = [["Hostname", n.hostname || "—"], ["Wi-Fi address", (n.wifi && n.wifi.ip) || "—"]];
   if (other.length) rows.push(["Other", other.join(" · ")]);
+  if (c && "zone" in c) {                        // protocol 4
+    const pz = phoneZone();
+    rows.push(["Time zone", !c.zone ? "—" : c.zone === pz ? `${c.zone} · matches this phone`
+      : `${c.zone} · this phone: ${pz || "unknown"}`]);
+  }
   rows.push(["Clock", clockText]);
   $("#pi-kv").innerHTML = rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("");
   $("#ssh-copy").disabled = !on || !sshTarget();
   $("#clock-sync").disabled = !on || !!(c && c.synced);
+}
+
+// carpi_sync.Uploads.status() -> [chip kind, chip text, line]
+function syncSummary(s) {
+  if (!("set_up" in s)) return ["warn", "Unknown", `Couldn't read the upload status: ${s.error || "unknown error"}`];
+  if (!s.set_up) return ["", "Not set up", "Not set up on this Pi yet"];
+  if (s.state === "uploading") return ["", "Uploading", "Uploading…"];
+  const join = (...parts) => parts.filter(Boolean).join(" · ");
+  const n = s.waiting || 0;
+  const drives = n ? `${n} drive${n === 1 ? "" : "s"} to upload` : "";
+  const next = !num(s.next_try_s) ? "" : s.next_try_s < 30 ? "next try soon"
+    : `next try in about ${Math.round(s.next_try_s / 60) || 1} min`;
+  if (s.state === "failed") return ["crit", "Failed", join(`Failed: ${s.error || "unknown error"}`, next)];
+  if (!s.auto) {
+    return ["", "Off", join("Automatic uploads off", drives,
+      num(s.last_success_age_s) ? `backed up ${ago(s.last_success_age_s)}` : "")];
+  }
+  if (s.state === "waiting") return ["warn", "Waiting", join("Waiting for internet", drives, next)];
+  if (s.state === "ok") {
+    return ["ok", "Backed up", join(num(s.last_success_age_s) ? `Backed up ${ago(s.last_success_age_s)}` : "Backed up",
+      drives || "nothing waiting")];
+  }
+  return ["", "Pending", join("Nothing uploaded since the Pi started", next)];
+}
+
+// The switches work before uploads are set up (the logger reads the publish setting either way);
+// Upload now needs the setup.
+function renderUploads() {
+  const s = app.sync, card = $("#uploads-card");
+  card.hidden = !s;
+  if (!s) return;
+  const on = connected() && num(app.protocol) && app.protocol >= 5;
+  card.classList.toggle("is-off", !on);
+  const [kind, label, line] = on ? syncSummary(s) : ["", "—", "—"];
+  chip($("#sync-chip"), kind, label, kind === "ok");
+  $("#sync-line").textContent = line;
+  if (!app.syncBusy) {
+    $("#up-auto").checked = s.auto !== false;
+    $("#up-publish").checked = s.publish !== false;
+  }
+  $("#up-auto").disabled = $("#up-publish").disabled = !on || app.syncBusy;
+  $("#up-now").disabled = !on || app.syncBusy || !s.set_up || s.state === "uploading";
 }
 
 function sshTarget() {
@@ -1580,10 +1683,42 @@ $("#ssh-copy").addEventListener("click", async () => {
 $("#clock-sync").addEventListener("click", async () => {
   try {
     const r = await app.link.request("clock", { now_ms: Date.now() });
-    app.clock = { synced: r.clock.synced, source: r.clock.source };
+    app.clock = { ...app.clock, synced: r.clock.synced, source: r.clock.source };
     toast(r.clock.set ? "Pi clock set from this phone" : `Not changed: ${r.clock.reason}`);
   } catch (e) { toast(e.message, true); }
   renderSettings();
+});
+
+// ---- uploads ----
+async function uploadRequest(cmd, args) {
+  app.syncBusy = true;
+  renderSettings();
+  try {
+    const r = await app.link.request(cmd, args);
+    app.sync = r.sync;
+    return r;
+  } catch (e) {
+    toast(e.message, true);
+    return null;
+  } finally {
+    app.syncBusy = false;
+    renderSettings();                              // also puts a refused switch back
+    renderDash();
+  }
+}
+
+$("#up-auto").addEventListener("change", async (e) => {
+  const auto = e.target.checked;
+  if (await uploadRequest("upload", { auto })) toast(auto ? "Automatic uploads on" : "Automatic uploads off: tap Upload now to upload");
+});
+
+$("#up-publish").addEventListener("change", async (e) => {
+  const publish = e.target.checked;
+  if (await uploadRequest("upload", { publish })) toast(publish ? "New drives go on the analyzer" : "New drives stay private");
+});
+
+$("#up-now").addEventListener("click", async () => {
+  if (await uploadRequest("upload_now")) toast("Uploading finished drives…");
 });
 
 // ---- power ----

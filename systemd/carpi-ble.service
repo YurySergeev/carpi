@@ -17,6 +17,10 @@ AmbientCapabilities=CAP_NET_ADMIN CAP_SYS_TIME
 ExecStart=/usr/bin/python3 -u carpi_ble.py
 Restart=always
 RestartSec=5
+# /run/carpi: Upload now drops a file there for carpi-sync.path. The logger declares the same
+# folder; whichever service starts first creates it, and neither removes it.
+RuntimeDirectory=carpi
+RuntimeDirectoryPreserve=yes
 
 [Install]
 WantedBy=multi-user.target

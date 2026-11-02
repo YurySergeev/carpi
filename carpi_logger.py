@@ -29,6 +29,9 @@ Output (default ~/carpi/logs/), one folder per day, e.g. logs/2026-09-26/:
 Tag drives for before/after comparisons by putting one word in ~/carpi/tag.txt
 (e.g. "pre-pcv"). The tag is copied into each new drive's metadata.
 
+Uploads (carpi_sync.py): if publishing is switched off on the phone (~/carpi/upload.json) at any
+moment during a drive, its metadata gets "publish": false and the public analyzer leaves it out.
+
 Status for the phone: /run/carpi/status.json (state, current file, rows, request rate), and
 /run/carpi/live.json (latest reading of every value, rewritten twice a second while logging) for
 the Live tab. Both on tmpfs, so they cost the SD card nothing.
@@ -49,6 +52,7 @@ from pathlib import Path
 import can
 
 import carpi_presets
+import carpi_sync
 
 FUNCTIONAL_ID = 0x7DF   # "any OBD ECU"
 ENGINE_TX = 0x7E0       # physical request ID for the engine ECU (also where flow control goes)
@@ -111,6 +115,12 @@ assert {f"{p:02X}" for p in PIDS} == set(carpi_presets.CATALOG), "PIDS and CATAL
 def clock_ok():
     """1 once the wall clock can be trusted: synced over the internet, or set from the phone."""
     return int(CLOCK_SYNCED.exists() or PHONE_CLOCK.exists())
+
+
+def utc_offset(local):
+    """The Pi's offset from UTC at a naive local time, as "-05:00"."""
+    z = local.astimezone().strftime("%z")          # "-0500"
+    return f"{z[:3]}:{z[3:5]}"
 
 
 def log(msg):
@@ -360,6 +370,8 @@ def log_drive(engine, args, status, follows=None, live=None):
     """Log one drive (or one segment of it). Returns (how it ended, CSV name or None if nothing
     was saved). Ends on engine silence or, with "preset_change", when the active preset changes."""
     live = live or LiveFile(None)
+    if hasattr(time, "tzset"):          # not on Windows
+        time.tzset()                    # a time zone set from the phone applies from this drive on
     started = datetime.now()
     supported = engine.supported()
     save_supported(args, supported)
@@ -379,6 +391,7 @@ def log_drive(engine, args, status, follows=None, live=None):
     csv_path, meta_path = stem.with_suffix(".csv"), stem.with_suffix(".json")
     meta = {
         "start": started.isoformat(timespec="seconds"),
+        "utc_offset": utc_offset(started),
         "tag": read_tag(Path(args.tag_file).expanduser()),
         "request_id": f"0x{engine.req_id:X}",
         "supported_pids": sorted(f"{p:02X}" for p in supported),
@@ -389,6 +402,9 @@ def log_drive(engine, args, status, follows=None, live=None):
     }
     if follows:
         meta["follows"] = follows
+    upload_file = Path(args.upload_file).expanduser()
+    if not carpi_sync.read_settings(upload_file)["publish"]:
+        meta["publish"] = False          # publishing switched off on the phone: keep this drive private
     write_meta(meta_path, meta)
     name = f"{daydir.name}/{csv_path.name}"
     log(f"drive started -> {name} (tag '{meta['tag']}', preset '{preset['name']}', "
@@ -448,6 +464,10 @@ def log_drive(engine, args, status, follows=None, live=None):
                         log(f"preset changed to '{current['name']}'; starting a new file")
                         ended_by = "preset_change"
                         break
+                    if "publish" not in meta and not carpi_sync.read_settings(upload_file)["publish"]:
+                        meta["publish"] = False          # off at any moment = private, even if back on later
+                        write_meta(meta_path, meta)
+                        log("publishing switched off: this drive stays private")
                 if now - last_live >= LIVE_FILE_EVERY:
                     live.logging(name, latest, seen_at)
                     last_live = now
@@ -547,6 +567,8 @@ def main():
                     help="status snapshot for carpi_ble.py ('' = off)")
     ap.add_argument("--live-file", default="/run/carpi/live.json",
                     help="latest values for the phone's Live tab ('' = off)")
+    ap.add_argument("--upload-file", default="~/carpi/upload.json",
+                    help="upload settings from the phone; with publishing off, drives are marked private")
     ap.add_argument("--end-after", type=float, default=8.0,
                     help="seconds of engine silence that end a drive")
     ap.add_argument("--hz", type=float, default=10.0, help="max rows per second")

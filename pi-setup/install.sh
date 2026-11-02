@@ -47,7 +47,8 @@ for action in org.freedesktop.NetworkManager.settings.modify.system \
               org.freedesktop.NetworkManager.network-control \
               org.freedesktop.NetworkManager.wifi.scan \
               org.freedesktop.login1.power-off \
-              org.freedesktop.login1.reboot; do
+              org.freedesktop.login1.reboot \
+              org.freedesktop.timedate1.set-timezone; do
   if pkcheck --action-id "$action" --process "$pid" >/dev/null 2>&1; then
     echo "  yes  $action"
   else

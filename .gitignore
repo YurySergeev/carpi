@@ -8,6 +8,7 @@ tag.txt
 /active_preset.json
 /presets/
 /supported.json
+/upload.json
 
 # Private notes
 notes/

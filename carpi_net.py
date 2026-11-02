@@ -50,11 +50,11 @@ def split_terse(line):
 
 
 def friendly(stderr):
-    """An nmcli/NetworkManager error, shortened for a phone screen."""
+    """An nmcli/NetworkManager or timedatectl error, shortened for a phone screen."""
     text = (stderr or "").strip()
-    if re.search(r"not authorized|insufficient privileges|permission ?denied", text, re.I):
+    if re.search(r"not authorized|insufficient privileges|permission ?denied|access denied", text, re.I):
         return SETUP_HINT
-    first = text.splitlines()[0] if text else "NetworkManager refused"
+    first = text.splitlines()[0] if text else "the Pi refused"
     if first.startswith("Error: "):
         first = first[len("Error: "):]
     return first[:160]

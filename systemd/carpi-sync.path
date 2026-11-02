@@ -1,0 +1,10 @@
+[Unit]
+Description=Upload CarPi drives now (Upload now on the phone page)
+
+[Path]
+# carpi_ble.py creates this file; carpi_sync.py deletes it when the upload starts
+PathExists=/run/carpi/sync-now
+Unit=carpi-sync.service
+
+[Install]
+WantedBy=paths.target

@@ -338,3 +338,12 @@ dialog p { margin: 0 0 1rem; color: var(--head); }
 #net-form input { margin-bottom: 0.6rem; }
 .formerr { color: var(--warn); font-size: 0.85rem; margin: 0 0 0.6rem; }
 .row.wrap { flex-wrap: wrap; margin-top: 0.75rem; }
+
+/* Uploads card: on/off switches (a checkbox drawn as a switch) */
+.switch { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-top: 1rem; color: var(--head); font-weight: 600; cursor: pointer; }
+.switch input { appearance: none; -webkit-appearance: none; flex: none; position: relative; width: 2.9rem; height: 1.65rem; margin: 0; border-radius: 999px; background: var(--line); cursor: pointer; transition: background 0.15s; }
+.switch input::after { content: ""; position: absolute; top: 0.2rem; left: 0.2rem; width: 1.25rem; height: 1.25rem; border-radius: 50%; background: var(--head); transition: transform 0.15s; }
+.switch input:checked { background: var(--accent); }
+.switch input:checked::after { transform: translateX(1.25rem); background: #1a1408; }
+.switch input:disabled { opacity: 0.45; cursor: default; }
+.row.center { align-items: center; gap: 1rem; }

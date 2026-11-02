@@ -13,7 +13,7 @@ sudo ~/carpi/pi-setup/uninstall.sh   # undo
 
 | File | Installed to | What it allows |
 | --- | --- | --- |
-| `50-carpi.rules` | `/etc/polkit-1/rules.d/` | The user `carpi` (the Bluetooth service) may manage Wi-Fi through NetworkManager (add, change, forget, connect, scan) and shut down or restart the Pi, without a password. **Only those seven actions.** `carpi` can already do all of this with `sudo` when logged in; this only lets the background service do it for the phone page's Settings tab. |
+| `50-carpi.rules` | `/etc/polkit-1/rules.d/` | The user `carpi` (the Bluetooth service) may manage Wi-Fi through NetworkManager (add, change, forget, connect, scan), shut down or restart the Pi, and set its time zone to the phone's, without a password. **Only those eight actions.** `carpi` can already do all of this with `sudo` when logged in; this only lets the background service do it for the phone page's Settings tab. |
 | `../systemd/carpi-ble.service` | `/etc/systemd/system/` | Adds `CAP_SYS_TIME`, so the service can set the clock from the phone, only when the Pi isn't synced over the internet and the phone's time is later. |
 | `carpi-clock-save.service` + `.timer` | `/etc/systemd/system/` | Saves the time every minute. After a power cut the Pi then starts from the minute it lost power instead of its last internet sync. |
 

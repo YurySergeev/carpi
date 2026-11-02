@@ -7,8 +7,9 @@ writes small files in ~/carpi (presets, active_preset.json, tag.txt), reads the 
 /run/carpi/status.json and live.json, and reads the Pi's own health and can0 counters for the
 dashboard (carpi_system.py, sampled every SAMPLE_EVERY_S). From the Settings tab it also manages
 Wi-Fi (carpi_net.py, through NetworkManager), shuts down or restarts the Pi and sets its clock
-(carpi_admin.py); pi-setup/install.sh grants exactly those permissions. The protocol is in
-carpi_control.py; the phone page is web/config/.
+and time zone (carpi_admin.py); pi-setup/install.sh grants exactly those permissions. Its Uploads
+card switches automatic uploads and publishing (~/carpi/upload.json) and starts Upload now
+(carpi_sync.py). The protocol is in carpi_control.py; the phone page is web/config/.
 
 BlueZ over D-Bus, standard Raspberry Pi OS packages only:
   sudo apt install -y python3-dbus python3-gi
@@ -29,6 +30,7 @@ import argparse
 import json
 import signal
 import sys
+from pathlib import Path
 
 import dbus
 import dbus.exceptions
@@ -41,6 +43,7 @@ import carpi_control
 import carpi_mgmt
 import carpi_net
 import carpi_presets
+import carpi_sync
 import carpi_system
 
 BLUEZ = "org.bluez"
@@ -445,8 +448,11 @@ def main():
     sampler = carpi_system.Sampler(can=args.can, disk=args.home)
     sampler.sample()                       # first reading now; CPU % and frames/s need a second
     GLib.timeout_add_seconds(SAMPLE_EVERY_S, sampler.sample)
+    home, run_dir = Path(args.home).expanduser(), Path(args.status_file).parent
+    uploads = carpi_sync.Uploads(settings=home / "upload.json", logs=home / "logs",
+                                 sync_file=run_dir / "sync.json", trigger=run_dir / "sync-now")
     controller = carpi_control.Controller(store, args.status_file, system=sampler.snapshot,
-                                          net=carpi_net.Net(), admin=carpi_admin.Admin())
+                                          net=carpi_net.Net(), admin=carpi_admin.Admin(), uploads=uploads)
     app = Application(bus)
     service = Service(bus, 0, carpi_control.SERVICE_UUID)
     tx = TxCharacteristic(bus, 1, service)

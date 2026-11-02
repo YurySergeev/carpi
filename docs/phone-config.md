@@ -1,6 +1,6 @@
 # The phone page: dashboard, live values, logging setup and Pi settings
 
-After the phone connects, the page opens on a **Dashboard** tab. A **Live** tab shows chosen values about twice a second, with a warm-up card for cold starts. A **Logging** tab holds the tag and the presets described below. A **Settings** tab manages the Pi's Wi-Fi, shuts it down or restarts it, and syncs its clock. The page remembers which tab you used last.
+After the phone connects, the page opens on a **Dashboard** tab. A **Live** tab shows chosen values about twice a second, with a warm-up card for cold starts. A **Logging** tab holds the tag and the presets described below. A **Settings** tab manages the Pi's Wi-Fi, syncs its clock, controls drive uploads, and shuts the Pi down or restarts it. The page remembers which tab you used last.
 
 ## Dashboard
 
@@ -9,7 +9,7 @@ The page asks the Pi for `status` every 2 seconds while it's open and in front. 
 | Card | What it shows | Where it comes from |
 | --- | --- | --- |
 | **Bluetooth** | Live, not responding (no reply for 8 s), or disconnected; time since the last reply; round-trip time of the last request | The page itself |
-| **Car and OBD-II** | Whether the Pi is plugged in and the car is awake, what the logger is doing, CAN controller state, frames per second, the current drive (length, rows, file), preset and tag | `carpi_system.py` (can0) + the logger's `/run/carpi/status.json` |
+| **Car and OBD-II** | Whether the Pi is plugged in and the car is awake, what the logger is doing, CAN controller state, frames per second, the current drive (length, rows, file), preset, tag and upload status | `carpi_system.py` (can0), the logger's `/run/carpi/status.json` and `carpi_sync.py`'s `/run/carpi/sync.json` |
 | **Raspberry Pi** | CPU temperature, CPU load, clock speed, memory, SD card space, uptime, and under-voltage / throttling flags | `carpi_system.py` (`/proc`, `/sys`) |
 
 **How "plugged in" is decided.** The Pi only has power while the ignition is on, and with the ignition on the car's gateway sends a keep-alive frame on CAN about twice a second, even when the engine is off. `carpi_system.py` watches the kernel's receive counter for can0 (`/sys/class/net/can0/statistics/rx_packets`). Frames in the last 5 seconds means the OBD-II cable is in and the car is awake. No frames means the cable is out, or the car is asleep (only possible on bench power). It never opens a CAN socket, so it can't send anything to the car and works even while the logger is stopped.
@@ -71,10 +71,16 @@ The **Settings** tab controls the Pi itself over the same Bluetooth link. Becaus
   - **Connect** switches now. **Forget** removes a network (it asks first, and warns when it's the last one).
   - **Add network** scans for nearby networks, or takes a typed name for hidden ones. New networks go in at the bottom, so a café never jumps ahead of home.
   - The password goes over the encrypted link straight to NetworkManager. It's never logged, never sent back, and the page wipes the field as soon as it's sent.
-- **This Pi.** Hostname and IP addresses, with **Copy SSH command** (handy on the hotspot, where the address changes), and the clock's state.
+- **This Pi.** Hostname and IP addresses, with **Copy SSH command** (handy on the hotspot, where the address changes), the time zone and the clock's state.
+  - Drive folders and file names use the Pi's local time, so on connect the page switches the Pi to the phone's time zone if they differ, with a toast. The logger picks it up at the start of the next drive.
   - The Pi has no battery-backed clock. When it hasn't synced over the internet, the page offers the phone's time automatically on connect, and **Sync clock from phone** does it by hand.
   - The Pi only accepts a phone time that's later than its own, and less than a year later.
   - Drives logged after that get correct times (`clock_ok` = 1). A drive already running records its corrected start (`start_corrected`).
+- **Uploads.** Finished drives go to a private GitHub repo over whatever internet the Pi has, and from there to the public [analyzer](https://carpi-analyzer.onrender.com). The card shows the last result ("Backed up 3 min ago · nothing waiting", "Waiting for internet · 2 drives to upload · next try in about 1 min", "Failed: …").
+  - **Upload automatically** (on by default): the Pi tries 60 s after it starts, then every 2 minutes. Off: drives stay on the Pi until you tap **Upload now**.
+  - **Publish new drives** (on by default). Off: drives are still backed up, but marked `"publish": false` and left off the analyzer. This includes the drive being recorded when you switch it off, even if you switch it back on before the drive ends.
+  - **Upload now** works with automatic uploads off too. The drive being recorded uploads after it ends, usually early in the next drive.
+  - Setup, and how to hide a drive that's already public: [data-sync.md](data-sync.md).
 - **Power.** **Restart**, and **Shut down**: tap it before turning the car off, so the Pi closes its files and powers off cleanly instead of losing power mid-write. It stays off until the car's power comes back. Both ask first, reply, and act two seconds later.
 
 **One-time setup.** The Bluetooth service runs as the ordinary user `carpi`, so these changes need explicit permission. In an SSH session on the Pi, after `git pull`:
@@ -83,7 +89,7 @@ The **Settings** tab controls the Pi itself over the same Bluetooth link. Becaus
 sudo ~/carpi/pi-setup/install.sh
 ```
 
-It installs a polkit rule allowing exactly the Wi-Fi and power actions above, gives the service the right to set the clock, and adds a timer that saves the time every minute (so after a power cut the Pi restarts from the minute it lost power). It ends with a self-test. Details, and how to undo it: [pi-setup/README.md](../pi-setup/README.md). Until it's installed, the tab shows that command instead.
+It installs a polkit rule allowing exactly the Wi-Fi, power and time zone actions above, gives the service the right to set the clock, and adds a timer that saves the time every minute (so after a power cut the Pi restarts from the minute it lost power). It ends with a self-test. Details, and how to undo it: [pi-setup/README.md](../pi-setup/README.md). Until it's installed, the tab shows that command instead.
 
 **What it never does:** touch the car's CAN bus, run arbitrary commands, or reveal saved Wi-Fi passwords.
 
@@ -179,4 +185,4 @@ The protocol has one GATT service with two characteristics. The UUIDs are in `ca
 - **RX** (the phone writes): requests as JSON lines ending in `\n`, in chunks of any size.
 - **TX** (the Pi notifies): one JSON line per reply, split to fit the link's MTU.
 
-Commands are `hello`, `state`, `status`, `live`, `save`, `delete`, `activate` and `tag`, plus the settings commands `net`, `net_scan`, `net_add`, `net_forget`, `net_priority`, `net_connect`, `power` and `clock`. `hello` reports the protocol version: 2 added `live`, 3 added the settings. `live` returns the logger's latest readings for the columns the phone asks for, each with its age in seconds. The settings commands are handled by `carpi_net.py` and `carpi_admin.py`. `status` (and `state`, which includes it) returns three objects: `status` from the logger, `system` and `obd` from `carpi_system.py`, which `carpi_ble.py` samples every 2 seconds. They're documented at the top of `carpi_control.py`, and `tests/test_control.py` exercises them. Both characteristics require an encrypted (paired) link.
+Commands are `hello`, `state`, `status`, `live`, `save`, `delete`, `activate` and `tag`, plus the settings commands `net`, `net_scan`, `net_add`, `net_forget`, `net_priority`, `net_connect`, `power`, `clock`, `timezone`, `upload` and `upload_now`. `hello` reports the protocol version: 2 added `live`, 3 added the settings, 4 added `timezone`, 5 added the uploads. `live` returns the logger's latest readings for the columns the phone asks for, each with its age in seconds. The settings commands are handled by `carpi_net.py`, `carpi_admin.py` and `carpi_sync.py`. `status` (and `state`, which includes it) returns four objects: `status` from the logger, `system` and `obd` from `carpi_system.py`, which `carpi_ble.py` samples every 2 seconds, and `sync`, the upload status with its ages counted from the Pi's boot (so setting the clock doesn't disturb them). They're documented at the top of `carpi_control.py`, and `tests/test_control.py` exercises them. Both characteristics require an encrypted (paired) link.

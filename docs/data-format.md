@@ -48,9 +48,11 @@ The Pi has no real-time clock, so `time` can be wrong until NTP syncs. Use `elap
 Written when the drive starts:
 
 - `start`, `tag`, `request_id`, `supported_pids`
+- `utc_offset`: how far the Pi's local time was from UTC when the drive started (`-05:00`), so `start` and `time` can be converted after a trip to another time zone. If daylight saving starts or ends mid-drive, `time` jumps an hour; `elapsed_s` doesn't.
 - `preset` (`id` and `name`), and `weights`: PID → weight for the values actually logged
 - `fast_pids`: values at the top weight, read every row. `slow_pids`: the rest.
 - `follows`: only on a file started by a mid-drive preset change. It names the file before it (`2026-10-06/drive-171502.csv`).
+- `publish`: only when it's `false`. **Publish new drives** was off on the phone page at some point during the drive, so the drive is backed up but left off the public analyzer. It's written as soon as the switch goes off and stays even if it's switched back on. Adding it by hand to a drive's `.json` in the private data repo hides a drive that's already public ([data-sync.md](data-sync.md)).
 
 Refreshed every 30 s: `rows`, `duration_s`, `complete`. `"complete": false` means power was cut before the drive ended cleanly.
 

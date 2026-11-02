@@ -39,7 +39,17 @@ Settings (protocol 3; carpi_net.py and carpi_admin.py, allowed by pi-setup/50-ca
   net_forget uuid  /  net_priority order (uuids, most preferred first)  /  net_connect uuid
   power     action         "shutdown" | "reboot": replies first, acts POWER_DELAY_S later
   clock     now_ms         the phone's time; used only if the Pi isn't synced and is behind
-  hello and state also report clock: {synced, source}.
+  timezone  zone           the phone's time zone ("America/New_York"); the Pi switches to it, and
+                           the logger uses it from the next drive (protocol 4)
+  hello and state also report clock: {synced, source, zone}.
+
+Uploads (protocol 5; carpi_sync.Uploads):
+  upload    auto, publish  either or both (true/false): automatic uploads, and whether new drives
+                           go on the public analyzer (~/carpi/upload.json)
+  upload_now               start an upload now (even with automatic off): creates
+                           /run/carpi/sync-now, which carpi-sync.path turns into a run
+  status, state and hello also report sync: {set_up, auto, publish, state, waiting, error,
+  last_success_age_s, last_attempt_age_s, next_try_s} (ages measured from boot on the Pi).
 """
 import json
 import time
@@ -48,7 +58,7 @@ from pathlib import Path
 import carpi_net
 import carpi_presets as presets
 
-PROTOCOL = 3            # 2: the "live" request; 3: Wi-Fi, power and clock settings
+PROTOCOL = 5            # 2: the "live" request; 3: Wi-Fi, power and clock settings; 4: time zone; 5: uploads
 POWER_DELAY_S = 2       # shut down / restart this long after replying, so the reply gets out
 UNAVAILABLE = "not available on this Pi: update CarPi (git pull) and run  sudo ~/carpi/pi-setup/install.sh"
 SERVICE_UUID = "6c2a0001-4f3b-4d1e-9a57-3c8e2b7d5f10"
@@ -97,11 +107,11 @@ def catalog():
 
 
 class Controller:
-    def __init__(self, store, status_path, system=None, live_path=None, net=None, admin=None):
+    def __init__(self, store, status_path, system=None, live_path=None, net=None, admin=None, uploads=None):
         """system: a callable returning {"system": {...}, "obd": {...}} (carpi_system.Sampler
         .snapshot), or None where there's no Pi to read (tests). live_path defaults to
-        live.json next to the status file. net / admin: carpi_net.Net and carpi_admin.Admin, or
-        None where settings aren't available."""
+        live.json next to the status file. net / admin / uploads: carpi_net.Net,
+        carpi_admin.Admin and carpi_sync.Uploads, or None where they aren't available."""
         self.store = store
         self.status_path = Path(status_path) if status_path else None
         self.system = system
@@ -110,6 +120,7 @@ class Controller:
         self.live_path = Path(live_path) if live_path else None
         self.net = net
         self.admin = admin
+        self.uploads = uploads
         self._after = None
 
     def take_after(self):
@@ -157,6 +168,11 @@ class Controller:
                 out.update(self.system())
             except Exception as e:             # readings are best effort; the reply still goes out
                 out["system"] = {"error": f"{type(e).__name__}: {e}"}
+        if self.uploads is not None:
+            try:
+                out["sync"] = self.uploads.status()
+            except Exception as e:
+                out["sync"] = {"error": f"{type(e).__name__}: {e}"}
         return out
 
     def state(self):
@@ -164,7 +180,7 @@ class Controller:
                    tag=self.store.tag(), supported=self.store.supported())
         if self.admin is not None:
             clock = self.admin.clock_status()
-            out["clock"] = {"synced": clock["synced"], "source": clock["source"]}
+            out["clock"] = {"synced": clock["synced"], "source": clock["source"], "zone": clock.get("zone")}
         return out
 
     def handle(self, msg):
@@ -198,6 +214,14 @@ class Controller:
             return self._network(cmd, msg, self._need(self.net))
         if cmd == "clock":
             return {"clock": self._need(self.admin).set_clock(msg.get("now_ms"))}
+        if cmd == "timezone":
+            return {"timezone": self._need(self.admin).set_zone(msg.get("zone"))}
+        if cmd == "upload":
+            changes = {k: msg[k] for k in ("auto", "publish") if k in msg}
+            return {"sync": self._need(self.uploads).change(**changes)}
+        if cmd == "upload_now":
+            status = self._need(self.uploads).start_now()
+            return {"sync": {k: v for k, v in status.items() if k != "started"}, "started": True}
         if cmd == "power":
             action = msg.get("action")
             self._after = self._need(self.admin).power(action)      # raises for anything unknown

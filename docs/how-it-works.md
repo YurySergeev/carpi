@@ -32,12 +32,14 @@ flowchart LR
     PI -->|one CSV + JSON per drive| SD[("SD card<br/>~/carpi/logs")]
     PI -->|status.json, live.json<br/>(RAM)| BLE["carpi_ble.py"]
     BLE <-->|Bluetooth LE| PHONE["Phone<br/>web/config page"]
-    PHONE -->|preset, tag| BLE
-    BLE -->|active_preset.json, tag.txt| PI
-    SD -->|scp| PC["PC<br/>analyzer, reports, viewer"]
+    PHONE -->|preset, tag, upload settings| BLE
+    BLE -->|active_preset.json, tag.txt, upload.json| PI
+    SD -->|carpi_sync.py: git push<br/>finished drives, any internet| DATA[("GitHub carpi-data<br/>(private)")]
+    DATA -->|Action: safety check,<br/>publish.py render| LIVE["carpi-live → Render<br/>public analyzer"]
+    DATA -->|git pull| PC["PC<br/>analyzer, reports, viewer"]
 ```
 
-The phone never talks to the car. `carpi_ble.py` only reads the logger's status files and writes the preset and tag files the logger reads. See [phone-config.md](phone-config.md).
+The phone never talks to the car. `carpi_ble.py` only reads the logger's status files and writes the preset, tag and upload-settings files the logger and `carpi_sync.py` read. See [phone-config.md](phone-config.md). The upload side, its keys and its safety check are in [data-sync.md](data-sync.md).
 
 ## Logger states
 
@@ -54,7 +56,7 @@ stateDiagram-v2
 
 - **Waiting:** listen only. Kernel-level CAN filters pass only engine replies (`0x7E8`) and the gateway keep-alive. Nothing is transmitted while the car is asleep, so the Pi can't wake it or drain the battery.
 - **Detecting:** a `PID 0x00` request every 3 s, for at most ~2 minutes per bus wake-up.
-- **Logging:** read the ECU's supported-PID bitmaps, then poll the values in the active preset, capped at 10 rows/s (`--hz`). Each value has a weight; values at the preset's top weight are read on every row, half the top weight every other row, and so on (`carpi_presets.Schedule`). The built-in default reproduces the original setup: 12 values on every row and 12 taking turns, one per row. Every second the logger checks whether the phone picked a different preset; if so, it closes the file and starts a new one.
+- **Logging:** read the ECU's supported-PID bitmaps, then poll the values in the active preset, capped at 10 rows/s (`--hz`). Each value has a weight; values at the preset's top weight are read on every row, half the top weight every other row, and so on (`carpi_presets.Schedule`). The built-in default reproduces the original setup: 12 values on every row and 12 taking turns, one per row. Every second the logger checks whether the phone picked a different preset; if so, it closes the file and starts a new one. It also checks whether publishing was switched off, and if so marks the drive private (`"publish": false`).
 - **Ended:** final `fsync`, and the metadata is marked complete.
 
 ## Surviving power cuts
@@ -81,14 +83,19 @@ Some values, like oil temperature, aren't in standard OBD-II on this car. `Engin
 | `~/carpi/active_preset.json` | phone | the preset in use (none = the built-in default) |
 | `~/carpi/presets/<id>.json` | phone | presets saved from the phone |
 | `~/carpi/supported.json` | logger | which values the car answers to, so the phone can grey out the rest |
+| `~/carpi/upload.json` | phone | `{auto, publish}`: the Uploads card's two switches (missing = both on) |
+| `~/carpi/logs/.git` | `carpi_sync.py` | makes `logs` a checkout of the private `carpi-data` repo ([data-sync.md](data-sync.md)) |
+| `~/.ssh/carpi_data`, `~/.ssh/known_hosts_github` | `carpi_sync.py --keygen` | the Pi's upload key (it can write `carpi-data` only) and GitHub's pinned host key |
 | `~/carpi/probes/` | probes | `probe_addressing.py` and `probe_oil.py` results |
 | `/run/carpi/status.json` | logger | state, current file, rows, request rate (RAM, every 2 s) |
 | `/run/carpi/live.json` | logger | latest reading of every value, for the Live tab (RAM, every 0.5 s while logging) |
 | `/run/carpi/clock_from_phone` | Bluetooth service | the phone page set the clock, so the logger's `clock_ok` is 1 (RAM) |
-| `/etc/polkit-1/rules.d/50-carpi.rules` | `pi-setup/install.sh` | lets the Bluetooth service manage Wi-Fi and shut down/restart, nothing else ([pi-setup](../pi-setup/README.md)) |
+| `/run/carpi/sync.json` | `carpi_sync.py` | the last upload's state, drives waiting, last error (RAM; ages counted from boot) |
+| `/run/carpi/sync-now` | Bluetooth service | **Upload now**: `carpi-sync.path` sees it and starts a run, which deletes it |
+| `/etc/polkit-1/rules.d/50-carpi.rules` | `pi-setup/install.sh` | lets the Bluetooth service manage Wi-Fi, shut down/restart and set the time zone, nothing else ([pi-setup](../pi-setup/README.md)) |
 
-Everything under `~/carpi` except the code is git-ignored, so `git pull` never touches it. `/run/carpi` is created by `carpi-logger.service` (`RuntimeDirectory=carpi`).
+Everything under `~/carpi` except the code is git-ignored, so `git pull` never touches it. `/run/carpi` is created by `carpi-logger.service` or `carpi-ble.service`, whichever starts first (`RuntimeDirectory=carpi`).
 
 ## Testing
 
-The logger is tested against a simulated engine on a `python-can` virtual bus (`tests/`): a full drive with the multi-frame boost reply, preset changes mid-drive, a bad preset file, unsupported values, the live snapshot, and the UDS read (normal, refused, "response pending", multi-frame). The Bluetooth protocol, presets and Pi readings have their own tests there too. GitHub Actions runs them on every push (`.github/workflows/tests.yml`), alongside the viewer's tests (`pages.yml`). Run them locally with `python -m pytest tests -q`.
+The logger is tested against a simulated engine on a `python-can` virtual bus (`tests/`): a full drive with the multi-frame boost reply, preset changes mid-drive, a bad preset file, unsupported values, the live snapshot, and the UDS read (normal, refused, "response pending", multi-frame). The Bluetooth protocol, presets, Pi readings and uploads (against a local git repo standing in for GitHub) have their own tests there too. GitHub Actions runs them on every push (`.github/workflows/tests.yml`), alongside the viewer's tests (`pages.yml`). Run them locally with `python -m pytest tests -q`.

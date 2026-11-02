@@ -1,7 +1,7 @@
-// CarPi: let the Bluetooth service (user carpi) manage Wi-Fi and power from the phone page's
-// Settings tab, without a password. Exactly these actions; everything else falls through to
-// the normal rules. (carpi can already do all of this with sudo when logged in; this only lets
-// the background service do it.) Installed by pi-setup/install.sh, removed by uninstall.sh.
+// CarPi: let the Bluetooth service (user carpi) manage Wi-Fi, power and the time zone from the
+// phone page's Settings tab, without a password. Exactly these actions; everything else falls
+// through to the normal rules. (carpi can already do all of this with sudo when logged in; this
+// only lets the background service do it.) Installed by pi-setup/install.sh, removed by uninstall.sh.
 polkit.addRule(function (action, subject) {
   if (subject.user !== "carpi") {
     return polkit.Result.NOT_HANDLED;
@@ -13,7 +13,8 @@ polkit.addRule(function (action, subject) {
     "org.freedesktop.login1.power-off",                        // shut down
     "org.freedesktop.login1.power-off-multiple-sessions",      // ...also while someone is on SSH
     "org.freedesktop.login1.reboot",                           // restart
-    "org.freedesktop.login1.reboot-multiple-sessions"
+    "org.freedesktop.login1.reboot-multiple-sessions",
+    "org.freedesktop.timedate1.set-timezone"                   // time zone from the phone
   ];
   return allowed.indexOf(action.id) >= 0 ? polkit.Result.YES : polkit.Result.NOT_HANDLED;
 });

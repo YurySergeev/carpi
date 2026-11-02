@@ -1,6 +1,6 @@
 # CarPi: session handoff
 
-**Written:** Oct 6, 2026, at the end of a long Cowork session. **Updated:** Nov 2, 2026 (Bluetooth phone page, Live tab, oil-temperature probe, Pi settings phase 1, tests in CI, current paths).
+**Written:** Oct 6, 2026, at the end of a long Cowork session. **Updated:** Nov 2, 2026 (Bluetooth phone page, Live tab, oil-temperature probe, Pi settings phase 1 and the time zone, tests in CI, current paths).
 **Latest session state** (uncommitted work, open decisions, next steps): `notes/SESSION_HANDOFF.md` in the working clone. It's git-ignored, so it only exists on Yury's laptop; read it first if it's there.
 **For:** Claude in a new Cowork or Claude Code session picking up CarPi.
 **Owner:** Yury, who is also your user.
@@ -20,11 +20,12 @@ Read sections 1–3 before doing anything. The rest is reference.
   - Nothing has been logged after the repair yet.
   - Oil temperature: `probe_oil.py` is ready; Yury hasn't run the one-time check yet (§9, task 2).
 - **Most likely next tasks.**
-  1. Pi settings phase 1 (Settings tab: Wi-Fi, shut down/restart, clock): commit it, then run `pi-setup/install.sh` and test it on the Pi.
-  2. Pi settings phase 2: tools from the phone (the oil check), services, Update CarPi. Phase 3: diagnostics, drives list, SSH toggle, pairing.
-  3. Oil-temperature check, then the logger reads it.
-  4. The post-PCV comparison once Yury has done the repair.
-  5. Planned but not started: automatic upload to the public analyzer, boot speed, a replay simulator.
+  1. Pi settings (Settings tab: Wi-Fi, shut down/restart, clock, and the time zone matched to the phone's): run `pi-setup/install.sh` and test it on the Pi.
+  2. Automatic upload to the public analyzer, with an Uploads card in Settings (automatic on/off, Upload now, publish on/off): built Nov 2 as protocol 5, together with the time zone (protocol 4), not committed yet. Then the setup in `docs/data-sync.md`, each GitHub step asking first.
+  3. Pi settings phase 2: tools from the phone (the oil check), services, Update CarPi. Phase 3: diagnostics, drives list, SSH toggle, pairing.
+  4. Oil-temperature check, then the logger reads it.
+  5. The post-PCV comparison once Yury has done the repair.
+  6. Planned but not started: boot speed, a replay simulator.
   See §9 for the full backlog.
 
 ## 2. Hard rules
@@ -36,7 +37,7 @@ Read sections 1–3 before doing anything. The rest is reference.
 2. **Don't write sweeping probes.** No scripts that brute-force or enumerate identifiers, services or modules. Add VW identifiers one at a time, from a list confirmed with VCDS (see §9, task 4).
 3. **Never transmit while the car's bus is asleep.** The logger only polls after it sees bus traffic, and gives up after 40 tries (~2 min) per wake-up. That keeps it from holding a parked car awake and draining the battery. Keep that behavior in any change.
 4. **One talker at a time.** Stop `carpi-logger` before running `probe_addressing.py`, `probe_oil.py` or any other tool on `can0`, or the two will read each other's replies. (`probe_oil.py` refuses to start while the logger is active.) The phone page never talks to the car: it only reads the logger's files.
-5. **Ask before every commit and every push.** Leave changes uncommitted, show what changed, and wait for an explicit yes, separately for the commit and for the push. Approving a change isn't approving the commit. Also ask before `deploy/publish.py render`, Render or Pages deploys, and posting anywhere. No `Co-Authored-By: Claude` lines in commits: the README credits Claude instead.
+5. **Ask before every commit and every push.** Leave changes uncommitted, show what changed, and wait for an explicit yes, separately for the commit and for the push. Approving a change isn't approving the commit. Also ask before `deploy/publish.py render`, Render or Pages deploys, and posting anywhere. One standing exception (Nov 2): once uploads are set up, the `carpi-data` Action republishing the analyzer on every upload from the Pi is approved. Setting that up (repos, deploy keys, the `CARPI_LIVE_KEY` secret) still asks, one step at a time. No `Co-Authored-By: Claude` lines in commits: the README credits Claude instead.
 6. **Keep private things out of git.**
    - `CarPi_Documents/` is excluded via `.git/info/exclude`. `logs/`, `probes/`, `candump/` and `tag.txt` are in `.gitignore`.
    - Never commit Wi-Fi names or passwords, including the Pi's password.
@@ -65,13 +66,14 @@ Read sections 1–3 before doing anything. The rest is reference.
 | Compiled docs (PC, git-ignored) | `carpi\CarPi_Documents\` in the earlier OneDrive clone (`C:\Users\yumse\OneDrive\Documents\carpi`, device `yura-pc`): PDFs of the Claude docs, reports, scripts, notes. Not on the `C:\Users\Yury` machine. |
 | Phone page | https://yurysergeev.github.io/carpi/config/ (Web Bluetooth: Chrome on Android, Bluefy on iPhone). `?demo` tries it without the car. |
 | The Pi | `ssh carpi@carpi.local`, code in `~/carpi/`, logs in `~/carpi/logs/<YYYY-MM-DD>/drive-HHMMSS.csv` + `.json` |
-| All drives (complete set) | On the Pi (`~/carpi/logs/`). Also in the Render source repo `YurySergeev/carpi-live` under `drives/` (everything published so far). |
+| All drives (complete set) | On the Pi (`~/carpi/logs/`). Also in the Render source repo `YurySergeev/carpi-live` under `drives/` (everything published so far). Once uploads are set up: the private `YurySergeev/carpi-data`, which the Pi pushes to (`docs/data-sync.md`). |
+| Upload pipeline (not set up yet) | Pi `carpi_sync.py` → private `carpi-data` → its Action (`check_drives.py`, `publish.py render`) → `carpi-live` → Render. Master copy of `carpi-data`'s README and workflow: `deploy/data-repo/`. |
 | Drive viewer | https://yurysergeev.github.io/carpi/: built by GitHub Actions from `data/drives.toml` + `data/` |
 | Analyzer app (public, view-only) | https://carpi-analyzer.onrender.com/: Render free tier, deployed from `carpi-live` |
 | Claude doc: Documentation + Drive report | https://claude.ai/code/artifact/0e1c4734-8122-4ed4-9464-7b7bd5a47238 |
 | Claude doc: Analyzer User Guide | https://claude.ai/code/artifact/10ef509b-ce76-4e50-be49-13c121c7754b |
 
-Drives logged after Oct 1 exist only on the Pi until they're copied over (§9, task 1).
+Drives logged after Oct 1 exist only on the Pi until they're copied over or uploads are set up (§9, task 1).
 
 ## 5. Car and hardware
 
@@ -101,13 +103,14 @@ Drives logged after Oct 1 exist only on the Pi until they're copied over (§9, t
   - `carpi-logger.service` runs as `User=carpi` with `WorkingDirectory=/home/carpi/carpi`, `After`/`Requires` `can0.service`, and `Restart=always`. `RuntimeDirectory=carpi` creates `/run/carpi` for `status.json` and `live.json`.
   - `carpi-ble.service` runs `carpi_ble.py` (Bluetooth LE for the phone page) with `CAP_NET_ADMIN` and `CAP_SYS_TIME`, after `rfkill unblock bluetooth`.
   - `carpi-clock-save.timer` (from `pi-setup/`) touches `/var/lib/systemd/timesync/clock` every minute, so a power cut restarts the clock from that minute.
-- **Settings permissions:** `/etc/polkit-1/rules.d/50-carpi.rules` (from `pi-setup/install.sh`) lets user `carpi` manage Wi-Fi and shut down/restart without a password, nothing else. Without it the Settings tab shows the install command.
+  - Not installed yet: `carpi-sync.service` (oneshot, `Nice=19`, idle I/O) run by `carpi-sync.timer` (60 s after boot, then every 2 min) and `carpi-sync.path` (Upload now: `/run/carpi/sync-now`). `carpi-ble.service` now also has `RuntimeDirectory=carpi`. Setup: `docs/data-sync.md` step 6.
+- **Settings permissions:** `/etc/polkit-1/rules.d/50-carpi.rules` (from `pi-setup/install.sh`) lets user `carpi` manage Wi-Fi, shut down/restart and set the time zone without a password, nothing else. Without it the Settings tab shows the install command.
 - **Bluetooth:** `ControllerMode = le` in `/etc/bluetooth/main.conf` (LE only; with classic on, Android pairing breaks). Phones pair once through `sudo python3 ~/carpi/carpi_ble.py --pair`. Details: `docs/phone-config.md`.
 - **Packages:** `can-utils`, `python3-can`; for Bluetooth `python3-dbus`, `python3-gi`. For running `analyze_drives.py` on the Pi: `python3-pandas`, `python3-matplotlib`.
 - **Updating the Pi:** in an SSH session, `cd ~/carpi && git pull && sudo systemctl restart carpi-logger carpi-ble`. If anything under `systemd/` changed, copy those files to `/etc/systemd/system/` and run `sudo systemctl daemon-reload` first.
 - **Wi-Fi (NetworkManager):** Yury's home Wi-Fi at priority 10, then the phone hotspot at priority 5 with `connection.autoconnect-retries 0`, so the Pi keeps retrying the hotspot in the car. The real network names stay out of git: the Settings tab on the phone page shows them, and manages them.
 - **SSH:** password login, enabled. SSH key login is still a to-do.
-- **Layout of `~/carpi` on the Pi:** a git checkout of the repo. It also holds git-ignored files: `tag.txt`, `logs/`, `probes/`, `candump/`, and the phone's preset state (`active_preset.json`, `presets/`, `supported.json`). A leftover `carpi-logger.service` from September may still sit in `~/carpi` itself; the real one is `systemd/carpi-logger.service`, so it can be deleted. Full list of runtime files: `docs/how-it-works.md`.
+- **Layout of `~/carpi` on the Pi:** a git checkout of the repo. It also holds git-ignored files: `tag.txt`, `logs/`, `probes/`, `candump/`, and the phone's preset state (`active_preset.json`, `presets/`, `supported.json`) and upload switches (`upload.json`). Once uploads are set up, `logs/` is itself a git checkout of `carpi-data`. A leftover `carpi-logger.service` from September may still sit in `~/carpi` itself; the real one is `systemd/carpi-logger.service`, so it can be deleted. Full list of runtime files: `docs/how-it-works.md`.
 - **Recovery history:** Yury once lost the Pi login. `CarPi_Documents/4_Pi_Scripts/carpi-rescue.sh` is a one-shot script run from the boot partition through `systemd.run=` in `cmdline.txt`. It copies home folders out, enables SSH and resets the password from `newpass.txt`. It isn't in the repo, on purpose.
 
 ## 7. Software map (repo)
@@ -116,20 +119,22 @@ Drives logged after Oct 1 exist only on the Pi until they're copied over (§9, t
 | --- | --- | --- |
 | `carpi_logger.py` | The logger on the Pi. Depends only on `python-can`. Writes `/run/carpi/status.json` and `live.json` for the phone. `Engine.read_did()` does UDS `0x22`. | systemd. Tests: `python -m pytest tests -q` (simulated ECU on a `python-can` virtual bus). |
 | `carpi_presets.py` | The catalog of values a preset may pick (`CATALOG`), built-in presets, the weight scheduler (`Schedule`), and the preset/tag store under `~/carpi`. | `tests/test_presets.py` |
-| `carpi_ble.py`, `carpi_control.py`, `carpi_mgmt.py`, `carpi_system.py` | Bluetooth LE service for the phone page. `carpi_control.py` is the protocol (JSON lines; commands documented at its top; `PROTOCOL = 2`), `carpi_system.py` the Pi and CAN readings, `carpi_mgmt.py` the kernel advertising fallback. | `carpi-ble.service`. Tests in `tests/` |
-| `carpi_net.py`, `carpi_admin.py` | The Settings tab's back end: Wi-Fi through NetworkManager (`nmcli` for reads/changes, D-Bus `AddConnection` so passwords never hit a command line), shut down/restart through logind, the clock from the phone (`CAP_SYS_TIME`). Injectable backends. | `tests/test_net.py`, `tests/test_admin.py` |
-| `pi-setup/` | One-time system setup for the Settings tab: polkit rule `50-carpi.rules` (7 Wi-Fi/power actions for user `carpi`), the updated `carpi-ble.service`, a save-the-time-every-minute timer. `install.sh` ends with a `pkcheck` self-test; `uninstall.sh` reverts. | `sudo ~/carpi/pi-setup/install.sh` |
-| `web/config/` | The phone page: Dashboard, Live (values twice a second + warm-up card), Logging (tag, presets), Settings (Wi-Fi, power, clock, addresses). Plain JS, offline copy via a service worker: bump `?v=` in `index.html` and `CACHE` in `sw.js` together. | `?demo`, `?demo=oil`, `?demo=unplugged`, `?debug` |
+| `carpi_ble.py`, `carpi_control.py`, `carpi_mgmt.py`, `carpi_system.py` | Bluetooth LE service for the phone page. `carpi_control.py` is the protocol (JSON lines; commands documented at its top; `PROTOCOL = 5`: 3 settings, 4 time zone, 5 uploads), `carpi_system.py` the Pi and CAN readings, `carpi_mgmt.py` the kernel advertising fallback. | `carpi-ble.service`. Tests in `tests/` |
+| `carpi_net.py`, `carpi_admin.py` | The Settings tab's back end: Wi-Fi through NetworkManager (`nmcli` for reads/changes, D-Bus `AddConnection` so passwords never hit a command line), shut down/restart through logind, the clock from the phone (`CAP_SYS_TIME`), the time zone through timedated. Injectable backends. | `tests/test_net.py`, `tests/test_admin.py` |
+| `carpi_sync.py` | Uploads finished drives: `~/carpi/logs` is a git checkout of the private `carpi-data`; each run repairs power-cut damage, checks GitHub answers, commits everything but the drive being written, pushes (rebasing if GitHub is ahead) and writes `/run/carpi/sync.json`. Own deploy key (`--keygen`) and pinned GitHub host key. `Uploads` is the phone's back end (`upload`, `upload_now`, `~/carpi/upload.json`). | `carpi-sync.timer`; by hand `python3 ~/carpi/carpi_sync.py --now`. Tests: `tests/test_sync.py` (a local bare repo stands in for GitHub) |
+| `pi-setup/` | One-time system setup for the Settings tab: polkit rule `50-carpi.rules` (8 Wi-Fi/power/time-zone actions for user `carpi`), the updated `carpi-ble.service`, a save-the-time-every-minute timer. `install.sh` ends with a `pkcheck` self-test; `uninstall.sh` reverts. | `sudo ~/carpi/pi-setup/install.sh` |
+| `web/config/` | The phone page: Dashboard, Live (values twice a second + warm-up card), Logging (tag, presets), Settings (Wi-Fi, addresses, clock, time zone, uploads, power). Plain JS, offline copy via a service worker: bump `?v=` in `index.html` and `CACHE` in `sw.js` together. | `?demo`, `?demo=oil`, `?demo=unplugged`, `?debug` |
 | `probe_addressing.py` | One-off probe: tests 11-bit and 29-bit addressing, maps supported PIDs, decodes live values. `--watch` prints at 1 Hz. Saves `~/carpi/probes/probe-*.json`. | By hand, logger stopped |
 | `probe_oil.py` | One-time oil-temperature check: reads only UDS `22 20 2F` (allow-list), plus `01 00` and `01 05`. Saves `~/carpi/probes/oil-check-*.csv`. Refuses to run while the logger is active. | By hand, logger stopped. Tests: `tests/test_probe_oil.py` |
-| `systemd/` | `can0.service`, `carpi-logger.service`, `carpi-ble.service` | |
+| `systemd/` | `can0.service`, `carpi-logger.service`, `carpi-ble.service`, `carpi-sync.service` + `.timer` + `.path` | |
 | `tests/`, `.github/workflows/tests.yml` | Logger, presets, Bluetooth protocol, Pi readings, UDS. CI runs them on every push (Python 3.11). `tests/test_system.py` fails on Windows only (it creates a `soc:firmware` folder); it passes in CI. | `python -m pytest tests -q` |
 | `analyze_drives.py` | Local batch reporter. Takes CSVs, folders, wildcards or a `.txt` list and writes `reports/`: an `index.html` (compare by tag, idle-trim history), one HTML + JSON per drive, and `drives.csv`. Incremental: skips drives already reported unless `--force`. Thresholds are in the `T` dict. | `python analyze_drives.py logs --open` |
 | `analysis/carpi_analysis.py`, `analysis/build_site.py` | Analysis behind the GitHub Pages viewer. Builds `_site/` from `data/drives.toml`. Uses `elapsed_s` only. | `python -m pytest analysis -q`, `python analysis/build_site.py --out _site` |
 | `web/` | Static viewer front end (HTML/CSS/JS) | Built into `_site/` by CI |
 | `.github/workflows/pages.yml` | On push to `main`: Python 3.11, pytest, build, deploy Pages. A failure leaves the last good site live. | |
 | `carpi_app/` | Dash analyzer: time series, X vs Y, compare drives, 3-axis map. Built from registries: `channels.py` (`@derived`), `filters.py` (`@row_filter`), `events.py` (`@detector`), `views/` (`@register`). The query box goes through `safe_query.py`, a whitelist parser. | `python -m carpi_app` (or `analyzer.bat`) opens `http://127.0.0.1:8050`. Tests: `python -m pytest carpi_app/tests -q` |
-| `deploy/publish.py` | Bundles the app and every unique drive into `deploy/build/site/` and pushes it to `carpi-live`, which Render redeploys (3–5 min). `--exclude` / `--include` filter drives. | `python deploy/publish.py build` (local only) / `render` (pushes: ask first) |
+| `deploy/publish.py` | Bundles the app and every unique drive into `deploy/build/site/` and pushes it to `carpi-live`, which Render redeploys (3–5 min). `--exclude` / `--include` filter drives; `--logs DIR` reads drives from DIR; drives with `"publish": false` are left out. | `python deploy/publish.py build` (local only) / `render` (pushes: ask first) |
+| `deploy/check_drives.py`, `deploy/data-repo/` | The safety check the `carpi-data` Action runs before publishing (only drive files, sane sizes, known columns and metadata keys), and the master copy of `carpi-data`'s README, `.gitignore` and `publish.yml`. | `python deploy/check_drives.py <folder>`. Tests: `tests/test_check_drives.py` |
 | `data/` | Drives published on the viewer, plus `drives.toml` (titles, groups, findings) | |
 
 **Logger internals worth knowing:**
@@ -166,7 +171,7 @@ Drives logged after Oct 1 exist only on the Pi until they're copied over (§9, t
    cd $HOME\Documents\Software\carpi
    scp -r "carpi@carpi.local:~/carpi/logs" .
    ```
-   Then run `python -m carpi_app` and `python analyze_drives.py logs`. The 28 drives up to Oct 1 are also in `C:\Users\Yury\source\CarPi\logs\logs\`. Fallback: clone `YurySergeev/carpi-live` and use its `drives/`.
+   Then run `python -m carpi_app` and `python analyze_drives.py logs`. The 28 drives up to Oct 1 are also in `C:\Users\Yury\source\CarPi\logs\logs\`. Fallback: clone `YurySergeev/carpi-live` and use its `drives/`. Once uploads are set up, `gh repo clone YurySergeev/carpi-data logs\carpi-data` (then `git -C logs\carpi-data pull`) replaces `scp` (`docs/data-sync.md` step 8).
 2. **Oil temperature.** Spec: `notes\specs\2026-10-30-live-tab-design.md` (git-ignored, in the working clone).
    - Phase 1, Yury's job: on a cold start, with the logger stopped, run `python3 ~/carpi/probe_oil.py --watch` and note the dash's oil temperature against the elapsed seconds at 3+ points (cold, ~60 °C, warm). Not while driving. It saves `~/carpi/probes/oil-check-*.csv`.
    - Phase 2, once one conversion tracks the dash at 3+ points: add `0x202F` to the logger as a catalog value (`oil_c`, "Temperatures" group), decode it in `carpi_logger.py`, add it to the default preset at the slow weight, test against the fake ECU. The phone page already handles `oil_c` (the warm-up card switches to oil by itself; `?demo=oil` shows how).
@@ -193,7 +198,6 @@ Drives logged after Oct 1 exist only on the Pi until they're copied over (§9, t
 7. **Full-throttle baseline pulls** before any tune: 2–3 third-gear pulls from about 2,000 rpm, somewhere safe and legal. This is Yury's job; check the data afterwards.
 8. **Later:**
    - alerts on the Live tab (coolant hot, low charging voltage, later knock)
-   - automatic drive upload when the Pi reaches home Wi-Fi (needs a tightly scoped key on the Pi)
    - SSH key login from the PC and phone
    - LinkedIn post and Projects entry (Yury wants these)
    - a resume bullet refresh
@@ -235,12 +239,15 @@ ls -lh ~/carpi/logs/*/                        # list drives
 ip -details -statistics link show can0        # want ERROR-ACTIVE, 0 errors
 nmcli -t -f NAME,DEVICE connection show --active
 cd ~/carpi && git pull && sudo systemctl restart carpi-logger carpi-ble   # update code
+python3 ~/carpi/carpi_sync.py --now           # one upload with output (once uploads are set up)
+journalctl -u carpi-sync -n 30                # upload log
 ```
 
 **On the PC (PowerShell, in the repo folder):**
 
 ```powershell
-scp -r "carpi@carpi.local:~/carpi/logs" .     # pull every drive (Pi on home Wi-Fi)
+scp -r "carpi@carpi.local:~/carpi/logs" .     # pull every drive (Pi on home Wi-Fi), until uploads are set up
+git -C logs\carpi-data pull                   # after: new drives from carpi-data
 pip install -r carpi_app/requirements.txt pandas matplotlib
 python -m carpi_app                           # analyzer at http://127.0.0.1:8050
 python analyze_drives.py logs --open          # HTML reports in .\reports

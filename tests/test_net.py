@@ -182,3 +182,11 @@ def test_addresses_from_ip_json():
                       {"ifname": "wlan0", "addr_info": [{"local": "192.168.1.40"}]},
                       {"ifname": "eth0", "addr_info": []}])
     assert cn.parse_addresses(raw) == {"wlan0": ["192.168.1.40"]}
+
+
+def test_access_denied_points_to_the_setup():
+    assert cn.friendly("Failed to set time zone: Access denied") == cn.SETUP_HINT
+
+
+def test_empty_error_is_neutral():
+    assert cn.friendly("") == "the Pi refused"

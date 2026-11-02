@@ -1,0 +1,13 @@
+[Unit]
+Description=CarPi drive upload to GitHub (backup + public analyzer)
+After=carpi-logger.service
+
+[Service]
+Type=oneshot
+User=carpi
+WorkingDirectory=/home/carpi/carpi
+ExecStart=/usr/bin/python3 -u carpi_sync.py
+# Never compete with the logger for CPU or the SD card
+Nice=19
+IOSchedulingClass=idle
+TimeoutStartSec=10min
