@@ -9,7 +9,9 @@ dashboard (carpi_system.py, sampled every SAMPLE_EVERY_S). From the Settings tab
 Wi-Fi (carpi_net.py, through NetworkManager), shuts down or restarts the Pi and sets its clock
 and time zone (carpi_admin.py); pi-setup/install.sh grants exactly those permissions. Its Uploads
 card switches automatic uploads and publishing (~/carpi/upload.json) and starts Upload now
-(carpi_sync.py). The protocol is in carpi_control.py; the phone page is web/config/.
+(carpi_sync.py). For the Analysis tab, a low-priority thread follows the drive being recorded and
+opens saved drives (carpi_drives.py, carpi_stats.py); it only reads. The protocol is in
+carpi_control.py; the phone page is web/config/.
 
 BlueZ over D-Bus, standard Raspberry Pi OS packages only:
   sudo apt install -y python3-dbus python3-gi
@@ -40,6 +42,7 @@ from gi.repository import GLib
 
 import carpi_admin
 import carpi_control
+import carpi_drives
 import carpi_mgmt
 import carpi_net
 import carpi_presets
@@ -451,8 +454,11 @@ def main():
     home, run_dir = Path(args.home).expanduser(), Path(args.status_file).parent
     uploads = carpi_sync.Uploads(settings=home / "upload.json", logs=home / "logs",
                                  sync_file=run_dir / "sync.json", trigger=run_dir / "sync-now")
+    stats = carpi_drives.Drives(logs=home / "logs", status_file=args.status_file)
+    stats.start()                          # its own low-priority thread: follows the drive being recorded
     controller = carpi_control.Controller(store, args.status_file, system=sampler.snapshot,
-                                          net=carpi_net.Net(), admin=carpi_admin.Admin(), uploads=uploads)
+                                          net=carpi_net.Net(), admin=carpi_admin.Admin(), uploads=uploads,
+                                          stats=stats)
     app = Application(bus)
     service = Service(bus, 0, carpi_control.SERVICE_UUID)
     tx = TxCharacteristic(bus, 1, service)

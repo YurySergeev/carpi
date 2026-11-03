@@ -50,6 +50,18 @@ Uploads (protocol 5; carpi_sync.Uploads):
                            /run/carpi/sync-now, which carpi-sync.path turns into a run
   status, state and hello also report sync: {set_up, auto, publish, state, waiting, error,
   last_success_age_s, last_attempt_age_s, next_try_s} (ages measured from boot on the Pi).
+
+Analysis (protocol 6; carpi_drives.Drives runs carpi_stats.py in a background thread):
+  drives    before (optional)  saved drives, newest first, 15 at a time, starting after the drive
+                           id `before`: {drives: [{id, day, time, duration_s, rows, tag, preset,
+                           complete, private}], more, current (the drive being recorded)}
+  analysis  drive          "live" (default) or a drive id: {analysis: {id, live, recording, state,
+                           error, rows, duration_s, updated_s, columns, summary, events,
+                           events_total}}. state: ready | loading (the Pi is reading a saved
+                           drive: ask again) | none (nothing recorded since boot) | error
+  analysis_map  drive, x, y, z, filters, stat   an ECU-style map of z over x and y:
+                           {map: {id, state, x: {col, step, start}, y, nx, ny, stat, cells:
+                           [[ix, iy, value, rows]], rows}}; state loading while it's built
 """
 import json
 import time
@@ -58,7 +70,7 @@ from pathlib import Path
 import carpi_net
 import carpi_presets as presets
 
-PROTOCOL = 5            # 2: the "live" request; 3: Wi-Fi, power and clock settings; 4: time zone; 5: uploads
+PROTOCOL = 6            # 2: the "live" request; 3: Wi-Fi, power and clock settings; 4: time zone; 5: uploads; 6: analysis
 POWER_DELAY_S = 2       # shut down / restart this long after replying, so the reply gets out
 UNAVAILABLE = "not available on this Pi: update CarPi (git pull) and run  sudo ~/carpi/pi-setup/install.sh"
 SERVICE_UUID = "6c2a0001-4f3b-4d1e-9a57-3c8e2b7d5f10"
@@ -107,11 +119,13 @@ def catalog():
 
 
 class Controller:
-    def __init__(self, store, status_path, system=None, live_path=None, net=None, admin=None, uploads=None):
+    def __init__(self, store, status_path, system=None, live_path=None, net=None, admin=None, uploads=None,
+                 stats=None):
         """system: a callable returning {"system": {...}, "obd": {...}} (carpi_system.Sampler
         .snapshot), or None where there's no Pi to read (tests). live_path defaults to
-        live.json next to the status file. net / admin / uploads: carpi_net.Net,
-        carpi_admin.Admin and carpi_sync.Uploads, or None where they aren't available."""
+        live.json next to the status file. net / admin / uploads / stats: carpi_net.Net,
+        carpi_admin.Admin, carpi_sync.Uploads and carpi_drives.Drives, or None where they
+        aren't available."""
         self.store = store
         self.status_path = Path(status_path) if status_path else None
         self.system = system
@@ -121,6 +135,7 @@ class Controller:
         self.net = net
         self.admin = admin
         self.uploads = uploads
+        self.stats = stats
         self._after = None
 
     def take_after(self):
@@ -222,6 +237,14 @@ class Controller:
         if cmd == "upload_now":
             status = self._need(self.uploads).start_now()
             return {"sync": {k: v for k, v in status.items() if k != "started"}, "started": True}
+        if cmd == "drives":
+            return self._need(self.stats).drives(msg.get("before"))
+        if cmd == "analysis":
+            return {"analysis": self._need(self.stats).analysis(msg.get("drive", "live"))}
+        if cmd == "analysis_map":
+            return {"map": self._need(self.stats).analysis_map(
+                msg.get("drive", "live"), msg.get("x"), msg.get("y"), msg.get("z"),
+                msg.get("filters", []), msg.get("stat", "mean"))}
         if cmd == "power":
             action = msg.get("action")
             self._after = self._need(self.admin).power(action)      # raises for anything unknown

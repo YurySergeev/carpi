@@ -319,7 +319,7 @@ def _upload_ctl(tmp_path, set_up=True):
 def test_protocol_5_and_sync_everywhere(tmp_path):
     ctl = _upload_ctl(tmp_path)
     h = _ask(ctl, rid=1, cmd="hello")
-    assert cc.PROTOCOL == 5 and h["protocol"] == 5
+    assert cc.PROTOCOL >= 5 and h["protocol"] == cc.PROTOCOL
     assert h["sync"]["set_up"] and h["sync"]["auto"] and h["sync"]["publish"]
     assert "sync" in _ask(ctl, rid=2, cmd="status") and "sync" in _ask(ctl, rid=3, cmd="state")
 
@@ -359,3 +359,38 @@ def test_upload_replies_stay_small(tmp_path):
                                                      "attempt_up": 400.0, "success_up": 100.0}))
     for msg in ({"cmd": "hello"}, {"cmd": "status"}, {"cmd": "upload", "auto": True}):
         assert len(ctl.handle_line(json.dumps(dict(msg, rid=1)))) < 4096
+
+
+class FakeStats:
+    def __init__(self):
+        self.calls = []
+
+    def drives(self, before=None):
+        self.calls.append(("drives", before))
+        return {"drives": [], "more": False, "current": None}
+
+    def analysis(self, drive):
+        self.calls.append(("analysis", drive))
+        return {"id": None, "live": True, "recording": False, "state": "none"}
+
+    def analysis_map(self, drive, x, y, z, filters, stat):
+        self.calls.append(("analysis_map", drive, x, y, z, filters, stat))
+        return {"id": None, "state": "none"}
+
+
+def test_protocol_6_routes_the_analysis_requests(tmp_path):
+    stats = FakeStats()
+    ctl = cc.Controller(cp.Store(tmp_path), tmp_path / "status.json", stats=stats)
+    assert _ask(ctl, rid=1, cmd="hello")["protocol"] == cc.PROTOCOL >= 6
+    assert _ask(ctl, rid=2, cmd="drives", before="2026-10-06/drive-171502")["drives"] == []
+    assert _ask(ctl, rid=3, cmd="analysis")["analysis"]["state"] == "none"
+    assert _ask(ctl, rid=4, cmd="analysis_map", drive="d", x="rpm", y="load_pct", z="trim_total",
+                filters=["warm"])["map"]["state"] == "none"
+    assert stats.calls == [("drives", "2026-10-06/drive-171502"), ("analysis", "live"),
+                           ("analysis_map", "d", "rpm", "load_pct", "trim_total", ["warm"], "mean")]
+
+
+def test_analysis_is_unavailable_without_the_backend(tmp_path):
+    for cmd in ("drives", "analysis", "analysis_map"):
+        r = _ask(_ctl(tmp_path), rid=1, cmd=cmd)
+        assert not r["ok"] and "update CarPi" in r["error"]

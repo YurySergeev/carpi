@@ -9,8 +9,9 @@
   <meta name="robots" content="noindex">
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="manifest" href="manifest.webmanifest">
-  <link rel="stylesheet" href="config.css?v=7">
-  <script src="config.js?v=7" defer></script>
+  <link rel="stylesheet" href="config.css?v=8">
+  <script src="config.js?v=8" defer></script>
+  <script src="analysis.js?v=8" defer></script>
 </head>
 <body>
   <div class="page">
@@ -34,6 +35,7 @@
     <nav class="tabs" role="tablist" aria-label="Sections">
       <button class="tab" type="button" role="tab" id="tab-dash" aria-controls="dash" aria-selected="true">Dashboard</button>
       <button class="tab" type="button" role="tab" id="tab-live" aria-controls="live" aria-selected="false">Live</button>
+      <button class="tab" type="button" role="tab" id="tab-analysis" aria-controls="analysis" aria-selected="false">Analysis</button>
       <button class="tab" type="button" role="tab" id="tab-home" aria-controls="home" aria-selected="false">Logging</button>
       <button class="tab" type="button" role="tab" id="tab-settings" aria-controls="settings" aria-selected="false">Settings</button>
     </nav>
@@ -100,6 +102,49 @@
         <div class="vchips" id="live-chips" role="group" aria-label="Values to show"></div>
         <p class="hint">Only values the active preset is collecting are listed. To watch something else live, add it to the preset on the Logging tab. Tap a tile for its trend.</p>
         <div class="ltiles" id="live-tiles"></div>
+      </section>
+    </main>
+
+    <main id="analysis" role="tabpanel" aria-labelledby="tab-analysis" hidden>
+      <p class="notice" id="an-hint" hidden></p>
+
+      <section class="card" id="an-drive-card" aria-live="polite">
+        <div class="card-head"><h2>Drive</h2><button class="btn small" id="an-change" type="button">Change</button></div>
+        <p class="state" id="an-drive-line">—</p>
+        <p class="sub" id="an-drive-sub"></p>
+        <div id="an-picker" hidden>
+          <button class="link" id="an-back-live" type="button">Back to the drive being recorded</button>
+          <ul class="drives" id="an-drives"></ul>
+          <button class="btn small" id="an-older" type="button" hidden>Show older</button>
+        </div>
+      </section>
+
+      <section class="card" id="an-summary-card">
+        <h2>Summary</h2>
+        <table class="bands" id="an-bands"></table>
+        <dl class="kv" id="an-kv"></dl>
+      </section>
+
+      <section class="card" id="an-map-card">
+        <div class="card-head"><h2>Map</h2><span class="chip" id="an-map-chip">—</span></div>
+        <div class="vchips" id="an-presets" role="group" aria-label="Map"></div>
+        <div id="an-custom" hidden>
+          <div class="an-axes">
+            <label>Across <select id="an-x"></select></label>
+            <label>Up <select id="an-y"></select></label>
+            <label>Value <select id="an-z"></select></label>
+            <label>Each cell <select id="an-stat"></select></label>
+          </div>
+          <div class="vchips" id="an-filters" role="group" aria-label="Rows to include"></div>
+        </div>
+        <p class="sub" id="an-map-note"></p>
+        <div id="an-map"></div>
+        <p class="sub" id="an-cell"></p>
+      </section>
+
+      <section class="card" id="an-events-card">
+        <div class="card-head"><h2>Events</h2><span class="chip" id="an-events-chip">—</span></div>
+        <ul class="events" id="an-events"></ul>
       </section>
     </main>
 

@@ -21,11 +21,12 @@ Read sections 1–3 before doing anything. The rest is reference.
   - Oil temperature: `probe_oil.py` is ready; Yury hasn't run the one-time check yet (§9, task 2).
 - **Most likely next tasks.**
   1. Pi settings (Settings tab: Wi-Fi, shut down/restart, clock, and the time zone matched to the phone's): run `pi-setup/install.sh` and test it on the Pi.
-  2. Automatic upload to the public analyzer, with an Uploads card in Settings (automatic on/off, Upload now, publish on/off): built Nov 2 as protocol 5, together with the time zone (protocol 4), not committed yet. Then the setup in `docs/data-sync.md`, each GitHub step asking first.
-  3. Pi settings phase 2: tools from the phone (the oil check), services, Update CarPi. Phase 3: diagnostics, drives list, SSH toggle, pairing.
-  4. Oil-temperature check, then the logger reads it.
-  5. The post-PCV comparison once Yury has done the repair.
-  6. Planned but not started: boot speed, a replay simulator.
+  2. Automatic upload to the public analyzer, with an Uploads card in Settings (automatic on/off, Upload now, publish on/off): built Nov 2 as protocol 5, together with the time zone (protocol 4), committed and pushed as `fb597d7`. Next: the setup in `docs/data-sync.md`, each GitHub step asking first.
+  3. Drive analysis on the phone (protocol 6, the Analysis tab): built Nov 3, not committed yet. On the Pi: `git pull`, `sudo systemctl restart carpi-ble`, then try the tab during a drive and on a saved drive.
+  4. Pi settings phase 2: tools from the phone (the oil check), services, Update CarPi. Phase 3: diagnostics, SSH toggle, pairing (the read-only drives list is part of the Analysis tab).
+  5. Oil-temperature check, then the logger reads it.
+  6. The post-PCV comparison once Yury has done the repair.
+  7. Planned but not started: boot speed, a replay simulator.
   See §9 for the full backlog.
 
 ## 2. Hard rules
@@ -119,11 +120,12 @@ Drives logged after Oct 1 exist only on the Pi until they're copied over or uplo
 | --- | --- | --- |
 | `carpi_logger.py` | The logger on the Pi. Depends only on `python-can`. Writes `/run/carpi/status.json` and `live.json` for the phone. `Engine.read_did()` does UDS `0x22`. | systemd. Tests: `python -m pytest tests -q` (simulated ECU on a `python-can` virtual bus). |
 | `carpi_presets.py` | The catalog of values a preset may pick (`CATALOG`), built-in presets, the weight scheduler (`Schedule`), and the preset/tag store under `~/carpi`. | `tests/test_presets.py` |
-| `carpi_ble.py`, `carpi_control.py`, `carpi_mgmt.py`, `carpi_system.py` | Bluetooth LE service for the phone page. `carpi_control.py` is the protocol (JSON lines; commands documented at its top; `PROTOCOL = 5`: 3 settings, 4 time zone, 5 uploads), `carpi_system.py` the Pi and CAN readings, `carpi_mgmt.py` the kernel advertising fallback. | `carpi-ble.service`. Tests in `tests/` |
+| `carpi_ble.py`, `carpi_control.py`, `carpi_mgmt.py`, `carpi_system.py` | Bluetooth LE service for the phone page. `carpi_control.py` is the protocol (JSON lines; commands documented at its top; `PROTOCOL = 6`: 3 settings, 4 time zone, 5 uploads, 6 analysis), `carpi_system.py` the Pi and CAN readings, `carpi_mgmt.py` the kernel advertising fallback. | `carpi-ble.service`. Tests in `tests/` |
 | `carpi_net.py`, `carpi_admin.py` | The Settings tab's back end: Wi-Fi through NetworkManager (`nmcli` for reads/changes, D-Bus `AddConnection` so passwords never hit a command line), shut down/restart through logind, the clock from the phone (`CAP_SYS_TIME`), the time zone through timedated. Injectable backends. | `tests/test_net.py`, `tests/test_admin.py` |
 | `carpi_sync.py` | Uploads finished drives: `~/carpi/logs` is a git checkout of the private `carpi-data`; each run repairs power-cut damage, checks GitHub answers, commits everything but the drive being written, pushes (rebasing if GitHub is ahead) and writes `/run/carpi/sync.json`. Own deploy key (`--keygen`) and pinned GitHub host key. `Uploads` is the phone's back end (`upload`, `upload_now`, `~/carpi/upload.json`). | `carpi-sync.timer`; by hand `python3 ~/carpi/carpi_sync.py --now`. Tests: `tests/test_sync.py` (a local bare repo stands in for GitHub) |
+| `carpi_stats.py`, `carpi_drives.py` | The Analysis tab. `carpi_stats`: stdlib engine (rows in; summary, events, maps out; incremental; the same definitions as `analysis/carpi_analysis.py` and `carpi_app`, parity-tested). `carpi_drives`: drive ids (only names inside `~/carpi/logs`), the saved list, one worker thread at nice 10 that follows the drive being recorded and loads one saved drive. Writes nothing. | `tests/test_stats.py`, `tests/test_drives.py`; parity: `analysis/test_stats_parity.py` (CI), `carpi_app/tests/test_stats_parity.py` (local) |
 | `pi-setup/` | One-time system setup for the Settings tab: polkit rule `50-carpi.rules` (8 Wi-Fi/power/time-zone actions for user `carpi`), the updated `carpi-ble.service`, a save-the-time-every-minute timer. `install.sh` ends with a `pkcheck` self-test; `uninstall.sh` reverts. | `sudo ~/carpi/pi-setup/install.sh` |
-| `web/config/` | The phone page: Dashboard, Live (values twice a second + warm-up card), Logging (tag, presets), Settings (Wi-Fi, addresses, clock, time zone, uploads, power). Plain JS, offline copy via a service worker: bump `?v=` in `index.html` and `CACHE` in `sw.js` together. | `?demo`, `?demo=oil`, `?demo=unplugged`, `?debug` |
+| `web/config/` | The phone page: Dashboard, Live (values twice a second + warm-up card), Analysis (drive picker, summary, map, events; `analysis.js`, with its demo), Logging (tag, presets), Settings (Wi-Fi, addresses, clock, time zone, uploads, power). Plain JS, offline copy via a service worker: bump `?v=` in `index.html` and `CACHE` in `sw.js` together. | `?demo`, `?demo=oil`, `?demo=unplugged`, `?debug` |
 | `probe_addressing.py` | One-off probe: tests 11-bit and 29-bit addressing, maps supported PIDs, decodes live values. `--watch` prints at 1 Hz. Saves `~/carpi/probes/probe-*.json`. | By hand, logger stopped |
 | `probe_oil.py` | One-time oil-temperature check: reads only UDS `22 20 2F` (allow-list), plus `01 00` and `01 05`. Saves `~/carpi/probes/oil-check-*.csv`. Refuses to run while the logger is active. | By hand, logger stopped. Tests: `tests/test_probe_oil.py` |
 | `systemd/` | `can0.service`, `carpi-logger.service`, `carpi-ble.service`, `carpi-sync.service` + `.timer` + `.path` | |

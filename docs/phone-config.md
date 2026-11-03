@@ -1,6 +1,6 @@
-# The phone page: dashboard, live values, logging setup and Pi settings
+# The phone page: dashboard, live values, analysis, logging setup and Pi settings
 
-After the phone connects, the page opens on a **Dashboard** tab. A **Live** tab shows chosen values about twice a second, with a warm-up card for cold starts. A **Logging** tab holds the tag and the presets described below. A **Settings** tab manages the Pi's Wi-Fi, syncs its clock, controls drive uploads, and shuts the Pi down or restarts it. The page remembers which tab you used last.
+After the phone connects, the page opens on a **Dashboard** tab. A **Live** tab shows chosen values about twice a second, with a warm-up card for cold starts. An **Analysis** tab analyzes the drive being recorded, or any saved drive on the Pi. A **Logging** tab holds the tag and the presets described below. A **Settings** tab manages the Pi's Wi-Fi, syncs its clock, controls drive uploads, and shuts the Pi down or restarts it. The page remembers which tab you used last.
 
 ## Dashboard
 
@@ -47,6 +47,18 @@ Until oil temperature is confirmed on this car (next section), the card runs on 
 **How it works.** The logger already holds the latest reading of everything it polls. While it's reading the car it rewrites `/run/carpi/live.json` (RAM, not the SD card) twice a second, and the phone's `live` request reads that file through `carpi_ble.py`. The phone never makes the Pi send anything extra to the car. Try it without the car at `…/carpi/config/?demo` (a sped-up cold start) or `?demo=oil` (as if oil temperature were set up).
 
 **Updating the Pi for the Live tab.** In an SSH session on the Pi: `cd ~/carpi && git pull && sudo systemctl restart carpi-logger carpi-ble`. An older Pi still works with the new page; the Live tab just explains that it needs this update.
+
+## Analysis
+
+The **Analysis** tab shows what the Pi makes of a drive: the one being recorded, followed as it grows, or any saved drive on the Pi. **Change** lists the saved drives, newest first, 15 at a time, with their tag and badges for *private* (publishing was off) and *incomplete* (a power cut).
+
+- **Summary.** Fuel trim by rpm band over warm, closed-loop driving. The idle row is the one a vacuum leak pushes up: the PCV finding is about +8 % at idle and about 0 % at cruise. Then distance, top speed, warm idle rpm, peak boost, the lowest timing under boost, and the hottest intake air and coolant.
+- **Map.** An ECU-style table of one value over two others. Presets: fuel trim, timing and lambda error over rpm × load, and boost over rpm × pedal, each with sensible filters (fuel trims only warm and in closed loop; gear shifts left out of timing, lambda and boost). **Custom** picks any X, Y and value the drive has, the average, lowest, highest or row count per cell, and the filters. Tap a cell for its range, value and rows. Cells with fewer than 5 rows are left out, and the map shows at most 12 × 12 cells: bins double in size to fit.
+- **Events.** Hard accelerations, timing dips and lean moments under boost, low voltage, high fuel trims and long idles, with the time into the drive. One still going shows *now*.
+
+The numbers are the same as the public viewer's and the PC analyzer's: `carpi_stats.py` uses their definitions, and tests compare them on the sample drive. The analysis runs on the Pi, in a low-priority thread of the Bluetooth service (`carpi_drives.py`), from the CSV the logger is writing. The logger isn't involved, nothing extra is asked of the car, and nothing is written to disk. A long saved drive takes a few seconds to open. Boost against its target isn't shown: this car's ECU doesn't report the target.
+
+**Updating the Pi for the Analysis tab.** In an SSH session on the Pi: `cd ~/carpi && git pull && sudo systemctl restart carpi-ble`. An older Pi still works with the new page; the tab just explains that it needs this update.
 
 ## Oil temperature (being confirmed)
 
@@ -185,4 +197,4 @@ The protocol has one GATT service with two characteristics. The UUIDs are in `ca
 - **RX** (the phone writes): requests as JSON lines ending in `\n`, in chunks of any size.
 - **TX** (the Pi notifies): one JSON line per reply, split to fit the link's MTU.
 
-Commands are `hello`, `state`, `status`, `live`, `save`, `delete`, `activate` and `tag`, plus the settings commands `net`, `net_scan`, `net_add`, `net_forget`, `net_priority`, `net_connect`, `power`, `clock`, `timezone`, `upload` and `upload_now`. `hello` reports the protocol version: 2 added `live`, 3 added the settings, 4 added `timezone`, 5 added the uploads. `live` returns the logger's latest readings for the columns the phone asks for, each with its age in seconds. The settings commands are handled by `carpi_net.py`, `carpi_admin.py` and `carpi_sync.py`. `status` (and `state`, which includes it) returns four objects: `status` from the logger, `system` and `obd` from `carpi_system.py`, which `carpi_ble.py` samples every 2 seconds, and `sync`, the upload status with its ages counted from the Pi's boot (so setting the clock doesn't disturb them). They're documented at the top of `carpi_control.py`, and `tests/test_control.py` exercises them. Both characteristics require an encrypted (paired) link.
+Commands are `hello`, `state`, `status`, `live`, `save`, `delete`, `activate` and `tag`, plus the settings commands `net`, `net_scan`, `net_add`, `net_forget`, `net_priority`, `net_connect`, `power`, `clock`, `timezone`, `upload` and `upload_now`, and the analysis commands `drives`, `analysis` and `analysis_map`. `hello` reports the protocol version: 2 added `live`, 3 added the settings, 4 added `timezone`, 5 added the uploads, 6 added the analysis. `live` returns the logger's latest readings for the columns the phone asks for, each with its age in seconds. The settings commands are handled by `carpi_net.py`, `carpi_admin.py` and `carpi_sync.py`; the analysis by `carpi_drives.py` with `carpi_stats.py`. `status` (and `state`, which includes it) returns four objects: `status` from the logger, `system` and `obd` from `carpi_system.py`, which `carpi_ble.py` samples every 2 seconds, and `sync`, the upload status with its ages counted from the Pi's boot (so setting the clock doesn't disturb them). They're documented at the top of `carpi_control.py`, and `tests/test_control.py` exercises them. Both characteristics require an encrypted (paired) link.

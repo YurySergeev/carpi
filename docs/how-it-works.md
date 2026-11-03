@@ -39,7 +39,7 @@ flowchart LR
     DATA -->|git pull| PC["PC<br/>analyzer, reports, viewer"]
 ```
 
-The phone never talks to the car. `carpi_ble.py` only reads the logger's status files and writes the preset, tag and upload-settings files the logger and `carpi_sync.py` read. See [phone-config.md](phone-config.md). The upload side, its keys and its safety check are in [data-sync.md](data-sync.md).
+The phone never talks to the car. `carpi_ble.py` only reads the logger's status files and writes the preset, tag and upload-settings files the logger and `carpi_sync.py` read. See [phone-config.md](phone-config.md). The upload side, its keys and its safety check are in [data-sync.md](data-sync.md). The Analysis tab reads the drive files too: `carpi_drives.py`, in the Bluetooth service, follows the CSV the logger is writing and runs `carpi_stats.py` on it (and on a saved drive when the phone asks), so the logger does no extra work.
 
 ## Logger states
 

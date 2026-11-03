@@ -376,7 +376,7 @@ class DemoLink {
     await new Promise((r) => setTimeout(r, 150));
     const fail = (error) => { throw new Error(error); };
     switch (cmd) {
-      case "hello": return { ok: true, protocol: 5, catalog: this.catalog, max_weight: 20, ...this.state() };
+      case "hello": return { ok: true, protocol: 6, catalog: this.catalog, max_weight: 20, ...this.state() };
       case "state": return { ok: true, ...this.state() };
       case "status": return { ok: true, ...this.live() };
       case "live": return { ok: true, live: this.liveValues(args.cols) };
@@ -438,7 +438,11 @@ class DemoLink {
         if (args.tag && !TAG_OK.test(args.tag)) fail("tag: one word, letters, digits, . _ - (max 32)");
         this.tag = args.tag;
         return { ok: true, ...this.state() };
-      default: fail(`unknown command '${cmd}'`);
+      default: {                         // the Analysis tab's requests: analysis.js
+        const r = this.analysisRequest && this.analysisRequest(cmd, args, fail);
+        if (r) return r;
+        fail(`unknown command '${cmd}'`);
+      }
     }
   }
 
@@ -484,7 +488,7 @@ const app = {
   link: null, catalog: [], maxWeight: 20, presets: [], active: null, tag: "", supported: null,
   status: { state: "unknown" }, open: null, editing: null, dirty: false, timer: null,
   system: null, obd: null, lastReply: 0, rtt: null,
-  tab: ["home", "live", "settings"].includes(store("carpi.tab")) ? store("carpi.tab") : "dash",
+  tab: ["home", "live", "analysis", "settings"].includes(store("carpi.tab")) ? store("carpi.tab") : "dash",
   net: null, nearby: [], netErr: null, netFastUntil: 0, clock: null, sync: null, syncBusy: false,
   protocol: null, liveTimer: null, live: null, liveHist: {}, liveOpen: new Set(), warmHist: [],
   liveSel: Array.isArray(store("carpi.live")) ? store("carpi.live") : null,   // null: the defaults
@@ -518,7 +522,8 @@ function applyState(msg) {
     if (msg.status.hz) store("carpi.hz", msg.status.hz);
   }
   // A status poll redraws only the status card: rebuilding the list mid-tap would eat the tap.
-  if (msg.presets) render(); else { renderConn(false); renderStatus(); renderDash(); renderLive(); renderSettings(); }
+  if (msg.presets) render();
+  else { renderConn(false); renderStatus(); renderDash(); renderLive(); renderAnalysisIfLoaded(); renderSettings(); }
 }
 
 function toast(text, error = false) {
@@ -648,7 +653,13 @@ function render() {
   renderPresets();
   renderDash();
   renderLive();
+  renderAnalysisIfLoaded();
   renderSettings();
+}
+
+// analysis.js loads after this file, and render() runs at startup before it has.
+function renderAnalysisIfLoaded() {
+  if (typeof renderAnalysis === "function") renderAnalysis();
 }
 
 function renderConn(withList = true) {
@@ -658,7 +669,7 @@ function renderConn(withList = true) {
   $("#connect").classList.toggle("primary", !on);
   for (const el of ["#tag-input", "#tag-save", "#new-preset"]) $(el).disabled = !on;
   if (!on && withList) renderPresets();
-  if (!on) { renderDash(); renderLive(); renderSettings(); }
+  if (!on) { renderDash(); renderLive(); renderAnalysisIfLoaded(); renderSettings(); }
 }
 
 function presetName(id) {
@@ -878,13 +889,14 @@ $("#save-apply").addEventListener("click", () => save(true));
 function showTab(tab) {
   app.tab = tab;
   store("carpi.tab", tab);
-  for (const t of ["dash", "live", "home", "settings"]) {
+  for (const t of ["dash", "live", "analysis", "home", "settings"]) {
     $(`#${t}`).hidden = tab !== t;
     $(`#tab-${t}`).setAttribute("aria-selected", String(tab === t));
   }
-  $("#page-title").textContent = { dash: "Dashboard", live: "Live", home: "Logging", settings: "Settings" }[tab];
+  $("#page-title").textContent = { dash: "Dashboard", live: "Live", analysis: "Analysis", home: "Logging", settings: "Settings" }[tab];
   if (tab === "dash") renderDash();
   if (tab === "live") renderLive();
+  if (tab === "analysis") renderAnalysisIfLoaded();
   if (tab === "settings") { netLast = -Infinity; renderSettings(); }   // refresh on the next tick
 }
 

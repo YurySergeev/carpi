@@ -190,7 +190,7 @@ dialog p { margin: 0 0 1rem; color: var(--head); }
 /* ---------- tabs ---------- */
 .tabs {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(5, 1fr);
   gap: 0.25rem;
   padding: 0.25rem;
   margin: 0 0 1.25rem;
@@ -316,6 +316,7 @@ dialog p { margin: 0 0 1rem; color: var(--head); }
 
 /* ---------- settings ---------- */
 @media (max-width: 400px) { .tab { font-size: 0.82rem; } }
+@media (max-width: 380px) { .tab { font-size: 0.76rem; } }
 .list-head { margin: 1rem 0 0.4rem; font-size: 0.9rem; color: var(--head); }
 .list-head .sub { display: inline; font-weight: 400; }
 .nets, .nearby { list-style: none; margin: 0 0 0.75rem; padding: 0; display: grid; gap: 0.4rem; }
@@ -347,3 +348,27 @@ dialog p { margin: 0 0 1rem; color: var(--head); }
 .switch input:checked::after { transform: translateX(1.25rem); background: #1a1408; }
 .switch input:disabled { opacity: 0.45; cursor: default; }
 .row.center { align-items: center; gap: 1rem; }
+
+/* Analysis tab */
+.bands { width: 100%; border-collapse: collapse; margin: 0.75rem 0 0.25rem; font-size: 0.9rem; font-variant-numeric: tabular-nums; }
+.bands th { text-align: left; font-weight: 600; font-size: 0.78rem; color: var(--text); padding: 0 0 0.3rem; }
+.bands td { padding: 0.3rem 0; border-top: 1px solid var(--line); color: var(--head); }
+.bands th:not(:first-child), .bands td:not(:first-child) { text-align: right; }
+.hm-grid { display: grid; gap: 2px; margin-top: 0.6rem; font-size: 0.68rem; font-variant-numeric: tabular-nums; }
+.hm-c { font: inherit; color: var(--head); border: 0; border-radius: 4px; min-height: 1.7rem; padding: 0; overflow: hidden; cursor: pointer; }
+.hm-c.empty { background: transparent; cursor: default; }
+.hm-c.sel { outline: 2px solid var(--head); outline-offset: -2px; }
+.hm-x, .hm-y { color: var(--text); font-size: 0.62rem; align-self: center; text-align: center; white-space: nowrap; }
+.hm-y { text-align: right; padding-right: 0.25rem; }
+.drives, .events { list-style: none; margin: 0.5rem 0 0; padding: 0; }
+.drives { display: grid; gap: 0.4rem; }
+.drives button { width: 100%; text-align: left; font: inherit; color: var(--head); background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 0.5rem 0.6rem; cursor: pointer; }
+.drives button.on { border-color: var(--accent); }
+.drives .meta, .events .meta { font-size: 0.8rem; color: var(--text); }
+.events li { display: flex; gap: 0.6rem; padding: 0.45rem 0; border-top: 1px solid var(--line); }
+.events .t { font-family: var(--mono); font-size: 0.8rem; color: var(--text); min-width: 3.2rem; }
+.events li.warn strong { color: var(--accent); }
+.events li.crit strong { color: var(--warn); }
+.an-axes { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; margin: 0.75rem 0; }
+.an-axes label { display: grid; gap: 0.2rem; font-size: 0.8rem; }
+.an-axes select { font: inherit; color: var(--head); background: var(--card-hi); border: 1px solid var(--line); border-radius: 8px; padding: 0.35rem; min-width: 0; }
